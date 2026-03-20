@@ -23,7 +23,7 @@ import {
   getParticipantsByAirline, deleteParticipant, deleteAirlineData, deleteAirlineById,
   generateCertificateBlob, generateCertificateWithModules,
   updateFullCertId, getCertCounters, resetCertCounter, resetAllCertCounters,
-  updateNdgScore, revokeCertificate,
+  updateNdgScore, revokeCertificate, updateValidity,
 } from '../api';
 import ModuleSelector from '../components/ModuleSelector';
 
@@ -59,7 +59,14 @@ function Spin({ cls = 'w-3.5 h-3.5 border-2 border-white/30 border-t-white' }) {
 }
 
 // ─── Template Variant Modal ───────────────────────────────────────────────────
-function VariantModal({ open, variant, setVariant, onConfirm, onClose, count }) {
+const VALIDITY_OPTIONS = [
+  { val: '12',        label: '12 Months' },
+  { val: '24',        label: '24 Months' },
+  { val: '36',        label: '36 Months' },
+  { val: 'Unlimited', label: 'Unlimited' },
+];
+
+function VariantModal({ open, variant, setVariant, validity, setValidity, onConfirm, onClose, count }) {
   if (!open) return null;
   return (
     <AnimatePresence>
@@ -73,30 +80,51 @@ function VariantModal({ open, variant, setVariant, onConfirm, onClose, count }) 
           onClick={e => e.stopPropagation()}>
           <div className="flex items-center justify-between px-5 py-4 border-b border-primary-100">
             <div>
-              <h2 className="text-base font-bold text-primary-800">Select Certificate Template</h2>
+              <h2 className="text-base font-bold text-primary-800">Certificate Settings</h2>
               <p className="text-xs text-primary-400 mt-0.5">Generating {count} certificate{count !== 1 ? 's' : ''}</p>
             </div>
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-primary-100 text-primary-400"><HiOutlineX className="w-5 h-5" /></button>
           </div>
-          <div className="p-5 space-y-3">
-            {[
-              { val: 'default', label: 'IFOA', sub: 'Standard green certificate template', color: 'emerald', abbr: 'IFOA' },
-              { val: 'india',   label: 'IFOA INDIA', sub: 'Orange variant for India region', color: 'orange', abbr: 'INDIA' },
-            ].map(opt => (
-              <button key={opt.val} onClick={() => setVariant(opt.val)}
-                className={`w-full flex items-center gap-4 p-4 rounded-xl border-2 transition-all text-left ${
-                  variant === opt.val ? `border-${opt.color}-400 bg-${opt.color}-50` : 'border-primary-200 hover:border-primary-300 bg-white'
-                }`}>
-                <div className={`w-10 h-10 rounded-xl bg-${opt.color}-100 flex items-center justify-center flex-shrink-0`}>
-                  <span className={`text-[9px] font-bold text-${opt.color}-700 leading-tight text-center`}>{opt.abbr}</span>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-bold text-primary-800">{opt.label}</p>
-                  <p className="text-xs text-primary-400">{opt.sub}</p>
-                </div>
-                {variant === opt.val && <HiOutlineCheckCircle className={`w-5 h-5 text-${opt.color}-500 flex-shrink-0`} />}
-              </button>
-            ))}
+          <div className="p-5 space-y-4">
+            {/* Template */}
+            <div>
+              <p className="text-xs font-semibold text-primary-500 uppercase tracking-wider mb-2">Template</p>
+              <div className="space-y-2">
+                {[
+                  { val: 'default', label: 'IFOA', sub: 'Standard green certificate', color: 'emerald', abbr: 'IFOA' },
+                  { val: 'india',   label: 'IFOA INDIA', sub: 'Orange variant for India region', color: 'orange', abbr: 'INDIA' },
+                ].map(opt => (
+                  <button key={opt.val} onClick={() => setVariant(opt.val)}
+                    className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
+                      variant === opt.val ? `border-${opt.color}-400 bg-${opt.color}-50` : 'border-primary-200 hover:border-primary-300 bg-white'
+                    }`}>
+                    <div className={`w-9 h-9 rounded-xl bg-${opt.color}-100 flex items-center justify-center flex-shrink-0`}>
+                      <span className={`text-[9px] font-bold text-${opt.color}-700`}>{opt.abbr}</span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-bold text-primary-800">{opt.label}</p>
+                      <p className="text-xs text-primary-400">{opt.sub}</p>
+                    </div>
+                    {variant === opt.val && <HiOutlineCheckCircle className={`w-5 h-5 text-${opt.color}-500 flex-shrink-0`} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* Validity */}
+            <div>
+              <p className="text-xs font-semibold text-primary-500 uppercase tracking-wider mb-2">Certificate Validity</p>
+              <div className="flex gap-2 flex-wrap">
+                {VALIDITY_OPTIONS.map(opt => (
+                  <button key={opt.val} onClick={() => setValidity(opt.val)}
+                    className={`px-3 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${
+                      validity === opt.val ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-primary-200 text-primary-500 hover:border-primary-400'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-primary-400 mt-1.5">Printed on certificate. Default: 36 Months.</p>
+            </div>
           </div>
           <div className="px-5 pb-5 flex gap-3">
             <button onClick={onClose} className="btn-outline flex-1">Cancel</button>
@@ -389,6 +417,7 @@ export default function Airlines() {
 
   const [variantModal, setVariantModal]       = useState(false);
   const [templateVariant, setTemplateVariant] = useState('default');
+  const [bulkValidity, setBulkValidity]       = useState('36'); // default 36 months
   const pendingGenerate = useRef(null);
 
   const [moduleModal, setModuleModal] = useState({ open: false, record: null });
@@ -412,7 +441,14 @@ export default function Airlines() {
   // fall back to email (also unique), never use airlineName alone.
   // Use airline.id (plain string) or airline._id — both are now guaranteed strings from
   // the backend toJSON(). Fall back to email (unique) only if somehow both are missing.
-  const airlineKey = (airline) => String(airline.id || airline._id || airline.email || airline.airlineName);
+  // Always use MongoDB _id as the unique key — never airlineName alone
+  // (two airlines can share a name but never an _id).
+  // The fake 'Other / Unassigned' entry has no _id so it is also excluded.
+  const airlineKey = (airline) => {
+    const id = airline.id || airline._id;
+    if (!id) return null; // no real _id — pseudo-entry, skip
+    return String(id);
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -636,12 +672,14 @@ export default function Airlines() {
   };
 
   // ── Certificate generation ───────────────────────────────────────────────────
-  const generateOneWithVariant = async (p, modulesOverride, variant) => {
+  const generateOneWithVariant = async (p, modulesOverride, variant, validity = '36') => {
     const pid = p.id || p._id;
     try {
+      // Save validity to DB before generating so it's baked into the PDF
+      await updateValidity(pid, validity);
       const res = modulesOverride
         ? await generateCertificateWithModules(pid, modulesOverride, variant)
-        : await generateCertificateBlob(pid, { variant }); // pass as object so axios sends ?variant=...
+        : await generateCertificateBlob(pid, { variant });
       const blob    = new Blob([res.data], { type: 'application/pdf' });
       const blobUrl = window.URL.createObjectURL(blob);
       const certId  = p.cert_sequence ? `${p.training_type}-${String(p.cert_sequence).padStart(5, '0')}` : 'Assigned';
@@ -654,11 +692,11 @@ export default function Airlines() {
     }
   };
 
-  const runBulkGenerate = async (toGenerate, modulesMap, variant = 'default') => {
+  const runBulkGenerate = async (toGenerate, modulesMap, variant = 'default', validity = '36') => {
     setGenerating(true);
     const results = [];
     for (const p of toGenerate) {
-      const r = await generateOneWithVariant(p, modulesMap[p.id || p._id] || null, variant);
+      const r = await generateOneWithVariant(p, modulesMap[p.id || p._id] || null, variant, validity);
       if (r) results.push(r);
     }
     setGenerating(false);
@@ -717,7 +755,7 @@ export default function Airlines() {
     const { toGenerate, modulesMap } = pendingGenerate.current || {};
     pendingGenerate.current = null;
     if (!toGenerate) return;
-    await runBulkGenerate(toGenerate, modulesMap, templateVariant);
+    await runBulkGenerate(toGenerate, modulesMap, templateVariant, bulkValidity);
   };
 
   const closeResults = () => { if (certResults) certResults.forEach(r => window.URL.revokeObjectURL(r.blobUrl)); setCertResults(null); };
@@ -763,7 +801,7 @@ export default function Airlines() {
 
       {/* Modals */}
       <ModuleSelector isOpen={moduleModal.open} onClose={() => { setModuleModal({ open: false, record: null }); pendingFdrRecord.current = null; }} onConfirm={handleModuleConfirm} initialModules={moduleModal.record?.modules ? moduleModal.record.modules.split(',').map(m => m.trim()) : []} />
-      <VariantModal open={variantModal} variant={templateVariant} setVariant={setTemplateVariant} onConfirm={handleVariantConfirm} onClose={() => { setVariantModal(false); pendingGenerate.current = null; }} count={pendingGenerate.current?.toGenerate?.length || checked.size} />
+      <VariantModal open={variantModal} variant={templateVariant} setVariant={setTemplateVariant} validity={bulkValidity} setValidity={setBulkValidity} onConfirm={handleVariantConfirm} onClose={() => { setVariantModal(false); pendingGenerate.current = null; }} count={pendingGenerate.current?.toGenerate?.length || checked.size} />
       <CertResultModal results={certResults} onClose={closeResults} />
       <CounterResetModal open={counterModal} onClose={() => setCounterModal(false)} counters={counters} ALL_TYPES={ALL_TYPES} resetting={resetting} onReset={handleResetCounter} onResetAll={handleResetAll} />
 
@@ -907,18 +945,21 @@ export default function Airlines() {
 
           <div className="flex-1" />
 
-          {/* Cert status filter */}
-          <div className="flex items-center gap-1 bg-primary-50 rounded-xl p-1">
-            {[['', 'All'], ['pending', '⏳ Pending'], ['generated', '✅ Generated']].map(([val, label]) => (
-              <button key={val} onClick={() => setFilterCertStatus(val)}
-                className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
-                style={filterCertStatus === val
-                  ? { background: '#1d4ed8', color: '#ffffff', boxShadow: '0 1px 3px rgba(29,78,216,0.4)' }
-                  : { color: '#94a3b8' }
-                }>
-                {label}
-              </button>
-            ))}
+          {/* Cert status filter with label */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-primary-500 uppercase tracking-wider whitespace-nowrap">Show:</span>
+            <div className="flex items-center gap-1 bg-primary-50 rounded-xl p-1">
+              {[['', 'All'], ['pending', '⏳ Pending'], ['generated', '✅ Generated']].map(([val, label]) => (
+                <button key={val} onClick={() => setFilterCertStatus(val)}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+                  style={filterCertStatus === val
+                    ? { background: '#1d4ed8', color: '#ffffff', boxShadow: '0 1px 3px rgba(29,78,216,0.4)' }
+                    : { color: '#94a3b8' }
+                  }>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Reset Counters */}
@@ -960,7 +1001,7 @@ export default function Airlines() {
       )}
 
       {/* ── Airline Groups ── */}
-      {!loading && filtered.map(({ airline, participants }) => {
+      {!loading && filtered.filter(({ airline }) => airlineKey(airline) !== null).map(({ airline, participants }) => {
         const aKey     = airlineKey(airline);
         const groupIds   = participants.map(p => p.id || p._id);
         const groupAllCk = groupIds.length > 0 && groupIds.every(id => checked.has(id));
@@ -1093,9 +1134,26 @@ export default function Airlines() {
                                     <div className="min-w-0">
                                       <p className="text-sm font-semibold text-primary-800">{fullName}</p>
                                       {p.cert_sequence && (
-                                        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded border mt-0.5 ${p.templateVariant === 'india' ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200'}`}>
-                                          {p.templateVariant === 'india' ? 'IFOA INDIA' : 'IFOA'}
-                                        </span>
+                                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                          <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded border ${p.templateVariant === 'india' ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200'}`}>
+                                            {p.templateVariant === 'india' ? 'IFOA INDIA' : 'IFOA'}
+                                          </span>
+                                          {/* Per-row validity dropdown */}
+                                          <select
+                                            value={p.cert_validity || '36'}
+                                            onChange={async e => {
+                                              try {
+                                                await updateValidity(pid, e.target.value);
+                                                toast.success('Validity updated');
+                                                fetchData();
+                                              } catch { toast.error('Failed to update validity'); }
+                                            }}
+                                            onClick={e => e.stopPropagation()}
+                                            className="text-[9px] font-semibold border border-primary-200 rounded px-1 py-0.5 bg-white text-primary-600 cursor-pointer"
+                                          >
+                                            {VALIDITY_OPTIONS.map(o => <option key={o.val} value={o.val}>{o.label}</option>)}
+                                          </select>
+                                        </div>
                                       )}
                                       {p.cert_sequence && (
                                         edit?.editing ? (

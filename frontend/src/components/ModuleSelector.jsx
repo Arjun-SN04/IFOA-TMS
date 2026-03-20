@@ -11,8 +11,9 @@ const ALL_MODULES = [
   'Mass & Balance',
   'Operational Procedures',
   'Communications',
-  'General Navigation',
-  'Radio Navigation',
+  'Flight Monitoring',
+  'Aircraft Performance',
+  'Air Traffic Management',
   'Principles of Flight',
 ];
 

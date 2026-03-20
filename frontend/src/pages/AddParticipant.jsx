@@ -28,8 +28,8 @@ const TRAINING_TYPES = [
 const ALL_MODULES = [
   'Air Law', 'Aircraft Systems', 'Navigation', 'Meteorology',
   'Flight Planning', 'Human Performance', 'Mass & Balance',
-  'Operational Procedures', 'Communications', 'General Navigation',
-  'Radio Navigation', 'Principles of Flight',
+  'Operational Procedures', 'Communications', 'Flight Monitoring',
+  'Aircraft Performance', 'Air Traffic Management', 'Principles of Flight',
 ];
 
 const emptyRow = () => ({

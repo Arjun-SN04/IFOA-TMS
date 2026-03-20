@@ -80,6 +80,7 @@ export const updateCertSequence     = (id, cert_sequence) => api.patch(`/partici
 export const updateFullCertId       = (id, cert_sequence, cert_year) => api.patch(`/participants/${id}/full-cert-id`, { cert_sequence, cert_year });
 export const updateNdgScore         = (id, ndg_score) => api.patch(`/participants/${id}/ndg-score`, { ndg_score });
 export const revokeCertificate      = (id)            => api.patch(`/participants/${id}/revoke-cert`);
+export const updateValidity         = (id, cert_validity) => api.patch(`/participants/${id}/validity`, { cert_validity });
 export const sendSubmissionConfirmation = (data) => api.post('/participants/send-confirmation', data);
 export const getCertCounters        = () => api.get('/certificates/counters');
 export const resetCertCounter       = (training_type, startFrom = 0) => api.post('/certificates/counters/reset', { training_type, startFrom, mode: 'hard' });
