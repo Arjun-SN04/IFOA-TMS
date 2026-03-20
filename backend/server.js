@@ -44,14 +44,18 @@ const { initDB } = require('./database');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// CORS: allow ALL origins.
+// Security is enforced via JWT tokens on every protected route,
+// not by restricting which domains can call the API.
 app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:5173',
-    process.env.FRONTEND_URL,        // set this in Render env vars if needed
-  ].filter(Boolean),
+  origin: true,               // reflect the request origin — allows any domain
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// Handle preflight OPTIONS requests for every route
+app.options('*', cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 let dbConnected = false;
