@@ -93,4 +93,8 @@ export const previewCertificateUrl          = (id)                        => `${
 export const generateCertificateWithModules = (id, modules, variant = 'default') =>
   api.post(`/certificates/generate/${id}`, { modules, templateVariant: variant }, { responseType: 'blob' });
 
+// ── Password Reset ────────────────────────────────────────────────────────────────────────────
+export const forgotPassword = (email)                          => api.post('/auth/airline/forgot-password', { email });
+export const resetPassword  = (email, token, newPassword)      => api.post('/auth/airline/reset-password', { email, token, newPassword });
+
 export default api;

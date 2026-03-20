@@ -5,6 +5,7 @@ import Layout from './components/Layout';
 import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import ResetPassword from './pages/ResetPassword';
 import AdminLogin from './pages/AdminLogin';
 import AdminSignup from './pages/AdminSignup';
 import Dashboard from './pages/Dashboard';
@@ -65,8 +66,9 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login"       element={<GuestRoute><Login /></GuestRoute>} />
         <Route path="/signup"      element={<GuestRoute><Signup /></GuestRoute>} />
-        <Route path="/admin-login"  element={<GuestRoute><AdminLogin /></GuestRoute>} />
-        <Route path="/admin-signup" element={<GuestRoute><AdminSignup /></GuestRoute>} />
+        <Route path="/admin-login"    element={<GuestRoute><AdminLogin /></GuestRoute>} />
+        <Route path="/admin-signup"   element={<GuestRoute><AdminSignup /></GuestRoute>} />
+        <Route path="/reset-password" element={<ResetPassword />} />
 
         <Route path="/admin" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           {/* Available to all authenticated users */}

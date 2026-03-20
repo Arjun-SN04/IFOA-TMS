@@ -8,7 +8,9 @@ const airlineSchema = new mongoose.Schema({
   password:    { type: String, required: true, minlength: 6 },
   role:        { type: String, default: 'airline' },
   lastLogin:   { type: Date, default: Date.now },
-  logo_url:    { type: String, default: null },                     // Cloudinary URL of company logo
+  logo_url:          { type: String, default: null },
+  resetPasswordToken: { type: String, default: null },
+  resetPasswordExpiry:{ type: Date,   default: null },
 }, { timestamps: true });
 
 airlineSchema.pre('save', async function () {

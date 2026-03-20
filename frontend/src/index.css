@@ -86,6 +86,16 @@ input[type="datetime-local"] {
   transition: width 0.25s ease, transform 0.25s ease;
 }
 
+/* Force light theme on all date/time inputs — prevents dark OS theme from inverting the calendar picker */
+input[type='date'],
+input[type='datetime-local'],
+input[type='time'],
+input[type='month'] {
+  color-scheme: light;
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
 /* Prevent body scroll when mobile sidebar is open */
 .sidebar-open body {
   overflow: hidden;

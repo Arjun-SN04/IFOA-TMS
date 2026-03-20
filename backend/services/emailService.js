@@ -1,5 +1,4 @@
 const nodemailer = require('nodemailer');
-const path = require('path');
 
 // ─── Transporter ──────────────────────────────────────────────────────────────
 let _transporter = null;
@@ -304,9 +303,6 @@ async function sendSubmissionConfirmation(opts) {
   const subject   = `✅ IFOA – ${count} Participant${count !== 1 ? 's' : ''} Enrolled: ${trainingType} – ${typeLabel}`;
   const payload   = { airlineName, contactName, participants, trainingType, trainingDate, endDate, submittedAt: new Date() };
 
-  // Resolve logo path — lives in frontend/src/assets/logo.png
-  const logoPath = path.join(__dirname, '..', '..', 'frontend', 'src', 'assets', 'logo.png');
-
   try {
     await transporter.sendMail({
       from: `"${process.env.SMTP_FROM_NAME || 'IFOA – International Flight Operations Academy'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
@@ -317,9 +313,10 @@ async function sendSubmissionConfirmation(opts) {
       attachments: [
         {
           filename:    'ifoa_logo.png',
-          path:        logoPath,
-          cid:         'ifoa_logo',   // referenced as cid:ifoa_logo in the HTML
+          content:     Buffer.from(LOGO_BASE64, 'base64'),
+          cid:         'ifoa_logo',
           contentDisposition: 'inline',
+          contentType: 'image/png',
         },
       ],
     });
@@ -333,4 +330,87 @@ async function sendSubmissionConfirmation(opts) {
   }
 }
 
-module.exports = { sendSubmissionConfirmation };
+// ─── Password Reset Email ─────────────────────────────────────────────────────────────────────
+async function sendPasswordResetEmail({ toEmail, airlineName, resetUrl }) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn('[email] SMTP not configured — password reset email skipped.');
+    return;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:'Segoe UI',Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:32px 16px;">
+  <tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0"
+      style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+
+      <tr>
+        <td style="background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 100%);padding:28px 40px;">
+          <h1 style="margin:0;font-size:22px;font-weight:800;color:#ffffff;">Password Reset Request</h1>
+          <p style="margin:6px 0 0;font-size:13px;color:#94a3b8;">IFOA Airline Portal</p>
+        </td>
+      </tr>
+
+      <tr><td style="padding:32px 40px;">
+        <p style="margin:0 0 16px;font-size:15px;color:#334155;line-height:1.6;">
+          Dear <strong>${airlineName}</strong>,
+        </p>
+        <p style="margin:0 0 24px;font-size:15px;color:#334155;line-height:1.6;">
+          We received a request to reset your password. Click the button below to set a new password.
+          This link is valid for <strong>1 hour</strong>.
+        </p>
+
+        <table cellpadding="0" cellspacing="0" style="margin:0 auto 28px;">
+          <tr>
+            <td style="background:#1d4ed8;border-radius:12px;text-align:center;">
+              <a href="${resetUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;letter-spacing:0.3px;">
+                Reset My Password
+              </a>
+            </td>
+          </tr>
+        </table>
+
+        <p style="margin:0 0 8px;font-size:13px;color:#64748b;line-height:1.6;">
+          If the button doesn't work, copy and paste this link into your browser:
+        </p>
+        <p style="margin:0 0 24px;font-size:12px;color:#3b82f6;word-break:break-all;">${resetUrl}</p>
+
+        <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;margin-bottom:24px;">
+          <p style="margin:0;font-size:13px;color:#92400e;">
+            ⚠️ If you didn't request this, you can safely ignore this email. Your password will not change.
+          </p>
+        </div>
+      </td></tr>
+
+      <tr>
+        <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 40px;">
+          <p style="margin:0;font-size:12px;color:#94a3b8;">
+            International Flight Operations Academy (IFOA)
+          </p>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>`;
+
+  const text = `Password Reset - IFOA\n\nDear ${airlineName},\n\nClick the link below to reset your password (valid for 1 hour):\n${resetUrl}\n\nIf you didn't request this, ignore this email.\n\nIFOA`;
+
+  try {
+    await transporter.sendMail({
+      from: `"${process.env.SMTP_FROM_NAME || 'IFOA – International Flight Operations Academy'}" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
+      to:      toEmail,
+      subject: '🔒 IFOA – Reset Your Password',
+      text,
+      html,
+    });
+    console.log(`[email] Password reset sent to ${toEmail}`);
+  } catch (err) {
+    console.error('[email] Failed to send password reset to', toEmail, err.message);
+  }
+}
+
+module.exports = { sendSubmissionConfirmation, sendPasswordResetEmail };
