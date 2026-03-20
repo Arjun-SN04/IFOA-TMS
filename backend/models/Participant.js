@@ -34,6 +34,7 @@ const participantSchema = new mongoose.Schema(
     ndg_score:   { type: Number, default: null, min: 0, max: 100 }, // NDG exam score (0-100)
     ndg_subtype: { type: String, default: 'I', enum: ['I', 'R'] },   // I = Initial, R = Recurrent
     online_synchronous: { type: Boolean, default: false },            // replaces location with 'Online Synchronous'
+    cert_validity: { type: String, default: '36', enum: ['12', '24', '36', 'Unlimited'] }, // months or Unlimited
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

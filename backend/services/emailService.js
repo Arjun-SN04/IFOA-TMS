@@ -15,10 +15,21 @@ function getTransporter() {
     return null;
   }
   _transporter = nodemailer.createTransport({
-    host, port,
-    secure: port === 465,
+    host,
+    port,
+    secure: port === 465,          // true for port 465 (SSL), false for 587/25 (STARTTLS)
     auth: { user, pass },
-    tls: { rejectUnauthorized: false },
+    // Allow any TLS certificate — required for many corporate/custom mail servers
+    tls: {
+      rejectUnauthorized: false,
+      ciphers: 'SSLv3',
+    },
+    // Increase timeouts so slow mail servers don't abort the connection
+    connectionTimeout: 10000,
+    greetingTimeout:   10000,
+    socketTimeout:     15000,
+    // Force the EHLO hostname to match the sending domain for better deliverability
+    name: (process.env.SMTP_FROM_EMAIL || user || '').split('@')[1] || 'ifoa.com',
   });
   return _transporter;
 }
@@ -314,7 +325,11 @@ async function sendSubmissionConfirmation(opts) {
     });
     console.log(`[email] Confirmation sent to ${toEmail} (${count} participant${count !== 1 ? 's' : ''})`);
   } catch (err) {
-    console.error('[email] Failed to send confirmation:', err.message);
+    // Log full SMTP error so we can diagnose delivery failures (e.g. blocked by recipient server)
+    console.error('[email] Failed to send confirmation to', toEmail);
+    console.error('[email] SMTP error:', err.message);
+    if (err.response) console.error('[email] SMTP response:', err.response);
+    if (err.code)     console.error('[email] Error code:', err.code);
   }
 }
 

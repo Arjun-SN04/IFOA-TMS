@@ -16,22 +16,26 @@ function certAuth(req, res, next) {
 
 router.use(certAuth);
 
-// ── Helper: ensure a participant has a guaranteed-unique cert_sequence ─────────
+// ── Helper: assign cert_sequence if not yet set; check collision if already set ───
 async function ensureUniqueCertSequence(participant) {
   if (!participant.cert_sequence) {
+    // Fresh assignment — never had a cert number before
     participant.cert_sequence = await reserveCertSequence(participant.training_type);
     await participant.save();
     return;
   }
+  // Cert number already assigned — only reassign if there is an actual collision
   const collision = await Participant.findOne({
     _id:           { $ne: participant._id },
     training_type: participant.training_type,
     cert_sequence: participant.cert_sequence,
   });
   if (collision) {
+    console.warn(`[cert] COLLISION: ${participant.participant_name} cert ${participant.cert_sequence} clashes with ${collision.participant_name}. Reassigning.`);
     participant.cert_sequence = await reserveCertSequence(participant.training_type);
     await participant.save();
   }
+  // No collision — preserve existing cert_sequence exactly
 }
 
 // ── Helper: set PDF response headers ──────────────────────────────────────────

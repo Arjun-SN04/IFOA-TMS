@@ -94,21 +94,11 @@ router.get('/by-airline', async (req, res) => {
       ),
     }));
 
-    // Orphaned participants not matched to any registered airline
-    const knownIds   = new Set(airlines.map((a) => String(a._id)));
-    const knownNames = new Set(airlines.map((a) => a.airlineName));
-    const orphaned = participants.filter((p) => {
-      if (p.submitted_by) return !knownIds.has(String(p.submitted_by));
-      return !knownNames.has(p.company) && !knownNames.has(p.airline_name);
-    });
-    if (orphaned.length) {
-      result.push({
-        airline: { airlineName: 'Other / Unassigned', email: '' },
-        participants: orphaned,
-      });
-    }
-
-    res.json(result);
+    // Filter out airline entries with zero participants — keeps UI clean
+    const nonEmpty = result.filter(r => r.participants.length > 0);
+    // Orphaned participants (submitted_by points to deleted airline) are silently
+    // excluded from the admin view — they remain in DB and can be found by direct search.
+    res.json(nonEmpty);
   } catch (err) {
     console.error('GET /by-airline error:', err.message);
     res.status(500).json({ error: err.message });
@@ -496,6 +486,21 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ─── PATCH /:id/validity (admin only) ───────────────────────────────────────
+router.patch('/:id/validity', async (req, res) => {
+  try {
+    if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admins only' });
+    const { cert_validity } = req.body;
+    const allowed = ['12', '24', '36', 'Unlimited'];
+    if (!allowed.includes(cert_validity)) return res.status(400).json({ error: 'Invalid validity value' });
+    const doc = await Participant.findByIdAndUpdate(req.params.id, { cert_validity }, { new: true });
+    if (!doc) return res.status(404).json({ error: 'Participant not found' });
+    res.json(doc);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── PATCH /:id/revoke-cert (admin only) ─────────────────────────────────────
 // Sets cert_sequence and templateVariant back to null, returning the participant
 // to "Pending" state. The airline will no longer be able to preview/download.
@@ -512,6 +517,7 @@ router.patch('/:id/revoke-cert', async (req, res) => {
     doc.cert_sequence     = null;
     doc.templateVariant   = 'default';
     doc.cert_year_override = null;
+    doc.cert_validity      = '36';
     await doc.save();
     res.json({ message: `Certificate revoked for ${doc.participant_name}`, participant: doc });
   } catch (err) {

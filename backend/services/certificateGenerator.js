@@ -13,8 +13,9 @@ const MODULES_LIST = [
   'Mass & Balance',
   'Operational Procedures',
   'Communications',
-  'General Navigation',
-  'Radio Navigation',
+  'Flight Monitoring',
+  'Aircraft Performance',
+  'Air Traffic Management',
   'Principles of Flight',
 ];
 
@@ -180,16 +181,17 @@ async function generateCertificate(participant) {
     });
   };
 
-  // ── 0. WHITEOUT BOTTOM-LEFT OLD CERT ID (only in HumanFactors_orange.pdf)
-  // Text: 'HF-00029-2025' at x=28.97..92.42, top=577.52..587.52
-  // Green line sits at topY=592pt — whiteout must stop at 590 to preserve it.
-  // Only apply for india variant HF/NDG types.
+  // ── 0. WHITEOUT AREAS SPECIFIC TO HumanFactors_orange.pdf (india variant HF/NDG) ──
   if (variant === 'india' && (rawType === 'HF' || rawType === 'NDG' || trainingType === 'Human Factors')) {
-    // Exact measurements (300dpi render):
-    //   Vertical green border: x=19..20pt  → start whiteout at x=21 (never touch border)
-    //   Cert ID text: x=28.97..92.42, top=577.52..587.52
-    //   Horizontal green line: topY=592pt  → stop whiteout at top=589 (3pt gap)
-    whiteOut(21, 575, 76, 14);  // x=21..97, top=575..589  — text hidden, both green lines preserved
+    // a) Bottom-left old cert ID text: x=21..97, top=575..589
+    whiteOut(21, 575, 76, 14);
+
+    // b) Fly91 logo in HumanFactors_orange.pdf (pixel-accurate from rendered PDF at 144dpi):
+    //    Horizontal green border:  y=18..21 (4px thick) — start whiteout at y=22
+    //    Vertical green border:    x=839 (single pixel)  — width=137 ends at x=837, leaves x=838..839 untouched
+    //    Logo pixel bounds:        x=713..838, y=22..74
+    //    The cert ID (top=23..39) is re-drawn cleanly on top in step 1.
+    whiteOut(700, 22, 137, 53);  // x=700..837, top=22..75 — logo gone, both green borders intact
   }
 
   // ── 1. CERT ID ───────────────────────────────────────────────────────────────
@@ -235,12 +237,15 @@ async function generateCertificate(participant) {
   // We replace both to match the actual training type.
 
   if (variant !== 'india') {
-    // ── GREEN: replace subtitle — whiteout x=360..660, top=75..93
-    whiteOut(360, 75, 300, 18);
+    // ── GREEN: replace subtitle — whiteout x=330..660, top=73..92
+    whiteOut(330, 73, 330, 20);
     const subW = helveticaBold.widthOfTextAtSize(subtitleText, 11);
+    // Right-align to x=607 (12pt left of template's 619) so it never overlaps
+    // the 'E' of CERTIFICATE, and position at top=88 (3pt above the 91 baseline)
+    // to create clear breathing room between subtitle and CERTIFICATE heading.
     page.drawText(subtitleText, {
-      x:    619 - subW,
-      y:    flipY(91),
+      x:    607 - subW,
+      y:    flipY(88),
       size: 11,
       font: helveticaBold,
       color: green,
@@ -272,7 +277,15 @@ async function generateCertificate(participant) {
 
   // ── 4. PARTICIPANT NAME ──────────────────────────────────────────────────────
   // Template name: top=239.1..309.1, safe x=61..740
+  // NOTE: 'THIS CERTIFIES THAT' sits at top=221..234 and is INSIDE this whiteout zone.
+  // We re-draw it immediately after for ALL variants.
   whiteOut(61, 219, 679, 98);
+
+  // Re-draw 'THIS CERTIFIES THAT' only for india variant
+  // (green templates already have it baked in above top=219 and it survives the whiteout)
+  if (variant === 'india') {
+    drawCentered('THIS CERTIFIES THAT', 233, helveticaBold, 10, green);
+  }
 
   const nameText = (participant.participant_name || '').trim();
   let nameFontSize = 52;
@@ -305,32 +318,39 @@ async function generateCertificate(participant) {
     ? 'Online Synchronous'
     : (participant.location || '').trim();
 
+  // ── Validity text helper ────────────────────────────────────────────────────
+  const validityLabel = (() => {
+    const v = participant.cert_validity;
+    if (!v || v === 'Unlimited') return 'Unlimited Period';
+    return `${v} Months`;
+  })();
+  const validityLine = `This certificate is valid for ${validityLabel}`;
+
   if (rawType === 'FDA') {
     drawCentered('Has successfully completed the North Atlantic Operations and Extended Diversion Time Operations Training.', 330, helvetica, 11);
     drawCentered('This training has been delivered as per the', 348, helvetica, 11);
     drawCentered('ICAO DOC 10085 First Edition 2017 and EASA SPA EDTO 110', 362, helvetica, 11);
-    drawCentered('This certificate is valid for 24 months from', 384, helvetica, 8);
+    drawCentered(validityLine, 384, helvetica, 8);
     drawCentered(dateText, 404, helveticaBold, 18);
-    if (locationText) drawCentered(`Training done from: ${locationText}`, 428, helvetica, 10);
+    if (locationText) drawCentered(`Delivered in: ${locationText}`, 428, helvetica, 10);
 
   } else if (rawType === 'FTL') {
     drawCentered('Has successfully completed Crew Control Training as per EASA Annex 3 Part-ORO Subpart FTL', 330, helvetica, 11);
     drawCentered('Flight Duty Limitations and Rest Requirements', 344, helvetica, 11);
-    drawCentered('This certificate is valid for Unlimited Period', 370, helvetica, 8);
+    drawCentered(validityLine, 370, helvetica, 8);
     drawCentered(dateText, 393, helveticaBold, 18);
-    if (locationText) drawCentered(`Training done from: ${locationText}`, 416, helvetica, 10);
+    if (locationText) drawCentered(`Delivered in: ${locationText}`, 416, helvetica, 10);
 
   } else if (rawType === 'TCD') {
     drawCentered('Has successfully completed the Competency Development Training.', 330, helvetica, 11);
     drawCentered('This training has been delivered as prescribed in', 348, helvetica, 11);
     drawCentered('ICAO DOC 9868', 362, helvetica, 11);
-    drawCentered('This certificate is valid for 24 months from', 384, helvetica, 8);
+    drawCentered(validityLine, 384, helvetica, 8);
     drawCentered(dateText, 404, helveticaBold, 18);
-    if (locationText) drawCentered(`Training done from: ${locationText}`, 428, helvetica, 10);
+    if (locationText) drawCentered(`Delivered in: ${locationText}`, 428, helvetica, 10);
 
   } else if (rawType === 'NDG') {
     const ndgScore   = participant.ndg_score != null ? participant.ndg_score : null;
-    // 'I' = Initial (default), 'R' = Recurrent
     const ndgSubtype = participant.ndg_subtype === 'R' ? 'Recurrent' : 'Initial';
 
     if (ndgScore !== null) {
@@ -344,32 +364,32 @@ async function generateCertificate(participant) {
       page.drawText(scoreValueText, { x: startX + line1W + 4,  y: flipY(336), size: 11, font: helveticaBold, color: black });
       drawCentered('This training has been delivered as prescribed in', 357, helvetica, 11);
       drawCentered('ICAO DOC 9284 Ed. 2025-2026, IATA DGR Ed. 67 2026 and IATA DGR CBTA Training Guidance/Appendix H.', 371, helvetica, 9.5);
-      drawCentered('This certificate is valid for 24 months from', 392, helvetica, 8);
+      drawCentered(validityLine, 392, helvetica, 8);
       drawCentered(dateText, 412, helveticaBold, 18);
-      if (locationText) drawCentered(`Training done from: ${locationText}`, 436, helvetica, 10);
+      if (locationText) drawCentered(`Delivered in: ${locationText}`, 436, helvetica, 10);
     } else {
       drawCentered(`Has successfully completed the ${ndgSubtype} Dangerous Goods No Carry Training.`, 330, helvetica, 11);
       drawCentered('This training has been delivered as prescribed in', 348, helvetica, 11);
       drawCentered('ICAO DOC 9284 Ed. 2025-2026, IATA DGR Ed. 67 2026 and IATA DGR CBTA Training Guidance/Appendix H.', 362, helvetica, 9.5);
-      drawCentered('This certificate is valid for 24 months from', 384, helvetica, 8);
+      drawCentered(validityLine, 384, helvetica, 8);
       drawCentered(dateText, 404, helveticaBold, 18);
-      if (locationText) drawCentered(`Training done from: ${locationText}`, 428, helvetica, 10);
+      if (locationText) drawCentered(`Delivered in: ${locationText}`, 428, helvetica, 10);
     }
 
   } else if (trainingType === 'Dispatch Graduate') {
     drawCentered('Has successfully completed ground school instruction required by the Initial Flight Dispatcher Course', 330, helvetica, 11);
     drawCentered('training as prescribed in ICAO Doc 10106, ICAO Doc 9868 and EASA Part ORO.GEN.110(c).', 344, helvetica, 11);
-    drawCentered('This certificate is valid for Unlimited Period', 370, helvetica, 8);
+    drawCentered(validityLine, 370, helvetica, 8);
     drawCentered(dateText, 393, helveticaBold, 18);
-    if (locationText) drawCentered(`Training done from: ${locationText}`, 416, helvetica, 10);
+    if (locationText) drawCentered(`Delivered in: ${locationText}`, 416, helvetica, 10);
 
   } else if (trainingType === 'Human Factors') {
     drawCentered('Has successfully attended the Human Factors Introduction Training for Flight Operations Personnel', 330, helvetica, 11);
     drawCentered('This training has been delivered as per the ICAO doc 9683 and ICAO doc 10106', 344, helvetica, 11);
     drawCentered('Prerequisite learning objectives: Human Factors in Aviation', 358, helvetica, 11);
-    drawCentered('This certificate is valid for Unlimited Period', 376, helvetica, 8);
+    drawCentered(validityLine, 376, helvetica, 8);
     drawCentered(dateText, 399, helveticaBold, 18);
-    if (locationText) drawCentered(`Training done from: ${locationText}`, 422, helvetica, 10);
+    if (locationText) drawCentered(`Delivered in: ${locationText}`, 422, helvetica, 10);
 
   } else if (trainingType === 'Recurrent') {
     drawCentered('Has successfully completed the Flight Dispatch Recurrent Training delivered in English', 327, helvetica, 11);
@@ -408,9 +428,9 @@ async function generateCertificate(participant) {
       afterBodyY = modStartY + rows.length * lineH + 8;
     }
 
-    drawCentered('This certificate is valid for 24 Months', afterBodyY, helvetica, 8);
+    drawCentered(validityLine, afterBodyY, helvetica, 8);
     drawCentered(dateText, afterBodyY + 18, helveticaBold, 18);
-    if (locationText) drawCentered(`Training done from: ${locationText}`, afterBodyY + 40, helvetica, 10);
+    if (locationText) drawCentered(`Delivered in: ${locationText}`, afterBodyY + 40, helvetica, 10);
   }
 
   return Buffer.from(await pdfDoc.save());
