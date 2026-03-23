@@ -83,10 +83,12 @@ router.get('/generate/:id', async (req, res) => {
 
     const incomingVariant = req.query.variant || 'default';
     await ensureUniqueCertSequence(participant);
+    // Mark certificate as released — airlines can now preview/download
+    participant.cert_released = true;
     if (participant.templateVariant !== incomingVariant) {
       participant.templateVariant = incomingVariant;
-      await participant.save();
     }
+    await participant.save();
 
     const data = participant.toObject();
     data.templateVariant = incomingVariant;
@@ -117,9 +119,9 @@ router.get('/preview/:id', async (req, res) => {
       if (!canAccess(req, participant)) {
         return res.status(403).json({ error: 'Access denied.' });
       }
-      // Certificate must already be issued before airline can preview/download
-      if (!participant.cert_sequence) {
-        return res.status(403).json({ error: 'Certificate has not been issued yet by IFOA.' });
+      // cert_released must be true — admin explicitly released this certificate
+      if (!participant.cert_released) {
+        return res.status(403).json({ error: 'Certificate has not been released yet by IFOA.' });
       }
     }
 
@@ -166,6 +168,8 @@ router.post('/generate/:id', async (req, res) => {
 
     const postVariant = req.body.templateVariant || req.query.variant || 'default';
     participant.templateVariant = postVariant;
+    // Mark certificate as released — airlines can now preview/download
+    participant.cert_released = true;
     await participant.save();
 
     const data = participant.toObject();
@@ -197,9 +201,9 @@ router.get('/download/:id', async (req, res) => {
       return res.status(403).json({ error: 'Access denied.' });
     }
 
-    // Certificate must already be issued by admin
-    if (!participant.cert_sequence) {
-      return res.status(403).json({ error: 'Certificate has not been issued yet by IFOA.' });
+    // cert_released must be true — admin must have explicitly released this certificate
+    if (!participant.cert_released) {
+      return res.status(403).json({ error: 'Certificate has not been released yet by IFOA.' });
     }
 
     const data = participant.toObject();

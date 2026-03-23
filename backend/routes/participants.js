@@ -514,10 +514,11 @@ router.patch('/:id/revoke-cert', async (req, res) => {
     if (!doc.cert_sequence) {
       return res.status(400).json({ error: 'This participant has no certificate to revoke.' });
     }
-    doc.cert_sequence     = null;
-    doc.templateVariant   = 'default';
+    doc.cert_sequence      = null;
+    doc.templateVariant    = 'default';
     doc.cert_year_override = null;
     doc.cert_validity      = '36';
+    doc.cert_released      = false;  // airline loses access immediately
     await doc.save();
     res.json({ message: `Certificate revoked for ${doc.participant_name}`, participant: doc });
   } catch (err) {

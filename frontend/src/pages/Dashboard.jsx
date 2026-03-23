@@ -106,14 +106,14 @@ export default function Dashboard() {
       {/* Stats */}
       <motion.div variants={item} className={`grid grid-cols-2 ${isAdmin ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-3 sm:gap-4`}>
         {statCards.map((card) => (
-          <div key={card.key} className="card p-5">
+          <div key={card.key} className="card p-4 sm:p-5">
             <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-primary-400 uppercase tracking-wider">{card.label}</p>
-                <p className="text-3xl font-bold text-primary-800 mt-2">{stats[card.key]}</p>
+              <div className="min-w-0">
+                <p className="text-[10px] sm:text-xs font-medium text-primary-400 uppercase tracking-wider leading-tight">{card.label}</p>
+                <p className="text-2xl sm:text-3xl font-bold text-primary-800 mt-1 sm:mt-2">{stats[card.key]}</p>
               </div>
-              <div className={`${card.color} w-12 h-12 rounded-xl flex items-center justify-center`}>
-                <card.icon className="w-6 h-6 text-white" />
+              <div className={`${card.color} w-9 h-9 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center flex-shrink-0`}>
+                <card.icon className="w-4 h-4 sm:w-6 sm:h-6 text-white" />
               </div>
             </div>
           </div>
@@ -121,7 +121,7 @@ export default function Dashboard() {
       </motion.div>
 
       {/* Quick Actions + Recent Records */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
 
         {/* Quick Actions */}
         <motion.div variants={item} className="card p-6">
@@ -182,7 +182,7 @@ export default function Dashboard() {
         </motion.div>
 
         {/* Recent Records */}
-        <motion.div variants={item} className="card p-4 sm:p-6 lg:col-span-2">
+        <motion.div variants={item} className="card p-4 sm:p-6 lg:col-span-2 overflow-hidden">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-bold text-primary-800">
               {isAdmin ? 'Recent Records' : 'My Recent Submissions'}

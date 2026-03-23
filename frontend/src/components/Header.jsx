@@ -279,7 +279,7 @@ export default function Header({ sidebarOpen, setSidebarOpen }) {
         </button>
         {/* Search — hidden on new enrollment page, visible everywhere else */}
         {location.pathname !== '/airline/enrollment/new' && location.pathname !== '/admin/participants/add' && (
-        <div className="relative hidden sm:block" ref={searchRef}>
+        <div className="relative" ref={searchRef}>
           <form onSubmit={handleSearchSubmit}>
             <HiOutlineSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-primary-400" />
             <input
@@ -288,7 +288,7 @@ export default function Header({ sidebarOpen, setSidebarOpen }) {
               value={searchQuery}
               onChange={handleSearchChange}
               onFocus={() => searchResults.length > 0 && setSearchOpen(true)}
-              className="pl-10 pr-4 py-2 w-44 sm:w-56 md:w-72 bg-primary-50 border border-primary-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all"
+              className="pl-10 pr-4 py-2 w-32 sm:w-44 md:w-64 bg-primary-50 border border-primary-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all"
             />
             {searchQuery && (
               <button
@@ -303,7 +303,7 @@ export default function Header({ sidebarOpen, setSidebarOpen }) {
 
           {/* Search results dropdown */}
           {searchOpen && (
-            <div className="absolute top-full left-0 mt-2 w-72 sm:w-96 bg-white rounded-xl border border-primary-200 shadow-xl z-50 overflow-hidden animate-fade-in">
+            <div className="absolute top-full left-0 mt-2 w-[calc(100vw-2rem)] sm:w-80 md:w-96 bg-white rounded-xl border border-primary-200 shadow-xl z-50 overflow-hidden animate-fade-in">
               {searching ? (
                 <div className="p-4 flex items-center gap-2 text-primary-400">
                   <div className="w-4 h-4 border-2 border-primary-300 border-t-primary-600 rounded-full animate-spin" />
@@ -383,7 +383,7 @@ export default function Header({ sidebarOpen, setSidebarOpen }) {
           </button>
 
           {notifOpen && (
-            <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white rounded-2xl border border-primary-100 shadow-2xl z-50 overflow-hidden">
+            <div className="fixed inset-x-2 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80 md:w-96 bg-white rounded-2xl border border-primary-100 shadow-2xl z-50 overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-primary-100 bg-primary-50/50">
                 <div className="flex items-center gap-2">
@@ -504,7 +504,7 @@ export default function Header({ sidebarOpen, setSidebarOpen }) {
           </button>
 
           {profileOpen && (
-            <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-xl border border-primary-200 shadow-lg py-2 z-50 animate-fade-in">
+            <div className="fixed right-2 top-16 sm:absolute sm:right-0 sm:top-full sm:mt-2 w-52 bg-white rounded-xl border border-primary-200 shadow-lg py-2 z-50 animate-fade-in">
               <div className="px-4 py-3 border-b border-primary-100">
                 <p className="text-sm font-semibold text-primary-800">{admin?.name || 'Admin'}</p>
                 {!isAdmin && admin?.airlineName && (

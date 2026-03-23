@@ -311,6 +311,9 @@ function ParticipantCard({ p, checked, onCheck, onPreview, onDownload, onEdit, o
             <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded border ${
               p.templateVariant === 'india' ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200'
             }`}>{p.templateVariant === 'india' ? 'IFOA INDIA' : 'IFOA'}</span>
+            <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+              p.cert_released ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-600 bg-amber-50 border-amber-200'
+            }`}>{p.cert_released ? '✓ Released' : '⏳ Not Released'}</span>
             {edit?.editing ? (
               <div className="flex items-center gap-1 flex-wrap">
                 <span className="text-[10px] text-primary-400">{p.training_type}-</span>
@@ -786,8 +789,8 @@ export default function Airlines() {
       const nm = !search || [p.participant_name, p.first_name, p.last_name, p.department].some(s => (s || '').toLowerCase().includes(search.toLowerCase()));
       const typeMatch   = !filterType || p.training_type === filterType;
       const statusMatch = !filterCertStatus
-        || (filterCertStatus === 'pending'   && !p.cert_sequence)
-        || (filterCertStatus === 'generated' &&  p.cert_sequence);
+        || (filterCertStatus === 'pending'   && !p.cert_released)
+        || (filterCertStatus === 'generated' &&  p.cert_released);
       return nm && typeMatch && statusMatch;
     }),
   })).filter(({ participants }) => participants.length > 0);
@@ -1137,6 +1140,14 @@ export default function Airlines() {
                                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                                           <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded border ${p.templateVariant === 'india' ? 'text-orange-600 bg-orange-50 border-orange-200' : 'text-emerald-600 bg-emerald-50 border-emerald-200'}`}>
                                             {p.templateVariant === 'india' ? 'IFOA INDIA' : 'IFOA'}
+                                          </span>
+                                          {/* cert_released indicator — shows what the airline sees */}
+                                          <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+                                            p.cert_released
+                                              ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                                              : 'text-amber-600 bg-amber-50 border-amber-200'
+                                          }`}>
+                                            {p.cert_released ? '✓ Released' : '⏳ Not Released'}
                                           </span>
                                           {/* Per-row validity dropdown */}
                                           <select
