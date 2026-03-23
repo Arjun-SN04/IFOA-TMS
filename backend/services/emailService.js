@@ -1,4 +1,6 @@
 const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
 
 // ─── Transporter (fresh every call — never cache on cloud platforms) ──────────
 function getTransporter() {
@@ -41,8 +43,12 @@ function fmtDate(d) {
   });
 }
 
-// ─── IFOA Logo — base64 PNG embedded inline (no file path needed on Render) ──
-const LOGO_BASE64 = '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';
+// ─── IFOA Logo — dynamically read from disk and encoded as base64 ──────────
+function getLogoBase64() {
+  const logoPath = path.join(__dirname, '..', 'assets', 'logo.png');
+  return fs.readFileSync(logoPath).toString('base64');
+}
+
 
 // ─── Build confirmation HTML ──────────────────────────────────────────────────
 function buildConfirmationHtml({ airlineName, contactName, participants, trainingType, trainingDate, endDate, submittedAt }) {
@@ -77,22 +83,22 @@ function buildConfirmationHtml({ airlineName, contactName, participants, trainin
 
       <!-- ═══════ HEADER ═══════ -->
       <tr>
-        <td bgcolor="#0c1a2e" style="background:#0c1a2e;padding:28px 40px 24px">
+        <td bgcolor="#0c1a2e" style="background:#0c1a2e;padding:28px 40px 24px;text-align:center">
+          <!-- Logo — full available width -->
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <!-- Logo -->
-              <td width="130" style="vertical-align:middle">
-                <div style="background:#ffffff;border-radius:10px;padding:8px 12px;display:inline-block">
-                  <img src="cid:ifoa_logo" width="110" alt="IFOA" style="display:block;border:0;height:auto"/>
-                </div>
-              </td>
-              <!-- Title -->
-              <td style="vertical-align:middle;padding-left:20px">
-                <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#94a3b8">International Flight Operations Academy</p>
-                <p style="margin:4px 0 0;font-size:20px;font-weight:800;color:#ffffff;letter-spacing:0.3px">Enrollment Confirmed</p>
+              <td align="center" bgcolor="#ffffff" style="background:#ffffff;border-radius:12px;padding:16px 20px;margin-bottom:16px">
+                <img src="cid:ifoa_logo" width="460" alt="IFOA" style="display:block;border:0;width:460px;max-width:100%;height:auto"/>
               </td>
             </tr>
           </table>
+          <!-- Spacer -->
+          <div style="height:16px"></div>
+          <!-- Divider -->
+          <div style="width:40px;height:2px;background:#16a34a;margin:0 auto 14px"></div>
+          <!-- Title -->
+          <p style="margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:#94a3b8">International Flight Operations Academy</p>
+          <p style="margin:0;font-size:22px;font-weight:800;color:#ffffff;letter-spacing:0.3px">Enrollment Confirmed</p>
         </td>
       </tr>
 
@@ -276,7 +282,7 @@ async function sendSubmissionConfirmation(opts) {
       html:    buildConfirmationHtml(payload),
       attachments: [{
         filename:    'ifoa_logo.png',
-        content:     Buffer.from(LOGO_BASE64, 'base64'),
+        content:     Buffer.from(getLogoBase64(), 'base64'),
         cid:         'ifoa_logo',
         contentDisposition: 'inline',
         contentType: 'image/png',
@@ -311,20 +317,18 @@ async function sendPasswordResetEmail({ toEmail, airlineName, resetUrl }) {
 
       <!-- ═══════ HEADER ═══════ -->
       <tr>
-        <td bgcolor="#0c1a2e" style="background:#0c1a2e;padding:28px 40px 24px">
+        <td bgcolor="#0c1a2e" style="background:#0c1a2e;padding:28px 40px 24px;text-align:center">
           <table width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td width="130" style="vertical-align:middle">
-                <div style="background:#ffffff;border-radius:10px;padding:8px 12px;display:inline-block">
-                  <img src="cid:ifoa_logo" width="110" alt="IFOA" style="display:block;border:0;height:auto"/>
-                </div>
-              </td>
-              <td style="vertical-align:middle;padding-left:20px">
-                <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#94a3b8">International Flight Operations Academy</p>
-                <p style="margin:4px 0 0;font-size:20px;font-weight:800;color:#ffffff">Password Reset Request</p>
+              <td align="center" bgcolor="#ffffff" style="background:#ffffff;border-radius:12px;padding:16px 20px">
+                <img src="cid:ifoa_logo" width="460" alt="IFOA" style="display:block;border:0;width:460px;max-width:100%;height:auto"/>
               </td>
             </tr>
           </table>
+          <div style="height:16px"></div>
+          <div style="width:40px;height:2px;background:#dc2626;margin:0 auto 14px"></div>
+          <p style="margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:#94a3b8">International Flight Operations Academy</p>
+          <p style="margin:0;font-size:22px;font-weight:800;color:#ffffff">Password Reset Request</p>
         </td>
       </tr>
 
@@ -411,7 +415,7 @@ async function sendPasswordResetEmail({ toEmail, airlineName, resetUrl }) {
       html,
       attachments: [{
         filename:    'ifoa_logo.png',
-        content:     Buffer.from(LOGO_BASE64, 'base64'),
+        content:     Buffer.from(getLogoBase64(), 'base64'),
         cid:         'ifoa_logo',
         contentDisposition: 'inline',
         contentType: 'image/png',
