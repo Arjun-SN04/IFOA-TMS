@@ -1,10 +1,11 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const Admin = require('../models/Admin');
 const Airline = require('../models/Airline');
 const { upload, cloudinary } = require('../services/upload');
-const { sendPasswordResetEmail } = require('../services/emailService');
+const { sendPasswordResetEmail, sendOtpEmail } = require('../services/emailService');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -125,8 +126,9 @@ router.post('/airline/upload-logo', upload.single('logo'), async (req, res) => {
 });
 
 // ─────────────────────────────────────────────
-//  AIRLINE SIGNUP
+//  AIRLINE SIGNUP — Step 1: validate + send OTP (do NOT create account yet)
 //  POST /api/auth/airline/signup
+//  Returns { otpSent: true } — client must then call /airline/verify-otp
 // ─────────────────────────────────────────────
 router.post('/airline/signup', async (req, res) => {
   try {
@@ -136,25 +138,147 @@ router.post('/airline/signup', async (req, res) => {
     if (password.length < 6)
       return res.status(400).json({ error: 'Password must be at least 6 characters.' });
 
-    const existing = await Airline.findOne({ email });
-    if (existing)
+    // Check duplicate email across both verified and pending accounts
+    const existing = await Airline.findOne({ email: email.toLowerCase().trim() });
+    if (existing && existing.emailVerified)
       return res.status(400).json({ error: 'An account with this email already exists.' });
 
-    const airline = await Airline.create({ name, airlineName, email, password, logo_url: logo_url || null });
+    // Generate a 6-digit OTP
+    const rawOtp    = String(Math.floor(100000 + Math.random() * 900000));
+    const hashedOtp = await bcrypt.hash(rawOtp, 10);
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    if (existing && !existing.emailVerified) {
+      // Reuse the pending record — update fields and resend OTP
+      existing.name        = name;
+      existing.airlineName = airlineName;
+      existing.password    = password;  // pre-save hook will re-hash
+      existing.logo_url    = logo_url || null;
+      existing.otpCode     = hashedOtp;
+      existing.otpExpiry   = otpExpiry;
+      existing.otpAttempts = 0;
+      await existing.save();
+    } else {
+      // Create a new unverified record
+      await Airline.create({
+        name, airlineName,
+        email:        email.toLowerCase().trim(),
+        password,
+        logo_url:     logo_url || null,
+        emailVerified: false,
+        otpCode:      hashedOtp,
+        otpExpiry,
+        otpAttempts:  0,
+      });
+    }
+
+    // Send OTP email — throw on failure so client knows to retry
+    await sendOtpEmail({ toEmail: email, airlineName, otp: rawOtp });
+
+    res.status(200).json({
+      otpSent: true,
+      message: `A 6-digit verification code has been sent to ${email}. It expires in 10 minutes.`,
+    });
+  } catch (err) {
+    console.error('Airline signup error:', err);
+    const msg = err.code === 11000
+      ? 'An account with this email already exists.'
+      : err.message || 'Server error during airline signup.';
+    res.status(err.code === 11000 ? 400 : 500).json({ error: msg });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  AIRLINE OTP VERIFY — Step 2: validate OTP, mark email verified, return token
+//  POST /api/auth/airline/verify-otp
+//  Body: { email, otp }
+// ─────────────────────────────────────────────
+router.post('/airline/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp)
+      return res.status(400).json({ error: 'Email and OTP are required.' });
+
+    const airline = await Airline.findOne({ email: email.toLowerCase().trim(), emailVerified: false });
+    if (!airline)
+      return res.status(400).json({ error: 'No pending registration found for this email. Please sign up again.' });
+
+    // Check expiry
+    if (!airline.otpExpiry || airline.otpExpiry < new Date())
+      return res.status(400).json({ error: 'OTP has expired. Please request a new code.' });
+
+    // Rate-limit: max 5 wrong attempts per code
+    if (airline.otpAttempts >= 5) {
+      // Invalidate this code to force a resend
+      airline.otpCode    = null;
+      airline.otpExpiry  = null;
+      await airline.save();
+      return res.status(429).json({ error: 'Too many incorrect attempts. Please request a new code.' });
+    }
+
+    // Verify OTP
+    const isMatch = await bcrypt.compare(String(otp).trim(), airline.otpCode);
+    if (!isMatch) {
+      airline.otpAttempts += 1;
+      await airline.save();
+      const remaining = 5 - airline.otpAttempts;
+      return res.status(400).json({
+        error: `Incorrect code. ${remaining} attempt${remaining !== 1 ? 's' : ''} remaining.`,
+      });
+    }
+
+    // ✅ OTP correct — mark account as verified and clear OTP fields
+    airline.emailVerified = true;
+    airline.otpCode       = null;
+    airline.otpExpiry     = null;
+    airline.otpAttempts   = 0;
+    await airline.save();
+
     const token = jwt.sign(
       { id: airline._id, email: airline.email, name: airline.name, airlineName: airline.airlineName, role: 'airline' },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    res.status(201).json({ token, admin: airline.toJSON() });
+    res.status(200).json({
+      token,
+      admin: airline.toJSON(),
+      message: 'Email verified successfully. Welcome to IFOA!',
+    });
   } catch (err) {
-    console.error('Airline signup error:', err);
-    // Return actual error so client can show meaningful message
-    const msg = err.code === 11000
-      ? 'An account with this email already exists.'
-      : err.message || 'Server error during airline signup.';
-    res.status(err.code === 11000 ? 400 : 500).json({ error: msg });
+    console.error('OTP verify error:', err);
+    res.status(500).json({ error: 'Server error during verification.' });
+  }
+});
+
+// ─────────────────────────────────────────────
+//  RESEND OTP — generate a fresh code, reset expiry to 10 min
+//  POST /api/auth/airline/resend-otp
+//  Body: { email }
+// ─────────────────────────────────────────────
+router.post('/airline/resend-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required.' });
+
+    const airline = await Airline.findOne({ email: email.toLowerCase().trim(), emailVerified: false });
+    if (!airline)
+      return res.status(400).json({ error: 'No pending registration found for this email.' });
+
+    const rawOtp    = String(Math.floor(100000 + Math.random() * 900000));
+    const hashedOtp = await bcrypt.hash(rawOtp, 10);
+
+    airline.otpCode     = hashedOtp;
+    airline.otpExpiry   = new Date(Date.now() + 10 * 60 * 1000);
+    airline.otpAttempts = 0;
+    await airline.save();
+
+    await sendOtpEmail({ toEmail: email, airlineName: airline.airlineName, otp: rawOtp });
+
+    res.json({ otpSent: true, message: 'A new verification code has been sent. It expires in 10 minutes.' });
+  } catch (err) {
+    console.error('Resend OTP error:', err);
+    res.status(500).json({ error: 'Failed to resend verification code.' });
   }
 });
 
@@ -175,6 +299,14 @@ router.post('/airline/login', async (req, res) => {
     const isMatch = await airline.comparePassword(password);
     if (!isMatch)
       return res.status(401).json({ error: 'Invalid email or password.' });
+
+    // Block login for unverified accounts
+    if (!airline.emailVerified)
+      return res.status(403).json({
+        error: 'Please verify your email first.',
+        needsVerification: true,
+        email: airline.email,
+      });
 
     airline.lastLogin = new Date();
     await airline.save();

@@ -9,8 +9,13 @@ const airlineSchema = new mongoose.Schema({
   role:        { type: String, default: 'airline' },
   lastLogin:   { type: Date, default: Date.now },
   logo_url:          { type: String, default: null },
-  resetPasswordToken: { type: String, default: null },
-  resetPasswordExpiry:{ type: Date,   default: null },
+  resetPasswordToken:  { type: String, default: null },
+  resetPasswordExpiry: { type: Date,   default: null },
+  // ── Email OTP verification ──────────────────────────────────────────────────
+  emailVerified:    { type: Boolean, default: false },
+  otpCode:          { type: String,  default: null },   // 6-digit code (hashed)
+  otpExpiry:        { type: Date,    default: null },   // 10 minutes from send
+  otpAttempts:      { type: Number,  default: 0 },      // wrong guesses this code
 }, { timestamps: true });
 
 airlineSchema.pre('save', async function () {

@@ -537,7 +537,7 @@ export default function Airlines() {
     }
   };
 
-  // ── NDG Score handler ─────────────────────────────────────────────────────────
+  // ── NDG Score handler — updates score in-place without reloading the page ───
   const handleNdgScoreSave = async (pid) => {
     const entry = ndgScores[pid];
     if (!entry) return;
@@ -547,8 +547,15 @@ export default function Airlines() {
     try {
       await updateNdgScore(pid, val);
       toast.success('NDG score saved');
+      // Update the score in local state only — NO full page reload
       setNdgScores(prev => ({ ...prev, [pid]: { value: String(val), saving: false, saved: true } }));
-      fetchData();
+      // Patch the in-memory data so the displayed value stays consistent
+      setData(prev => prev.map(({ airline, participants }) => ({
+        airline,
+        participants: participants.map(p =>
+          (p.id || p._id) === pid ? { ...p, ndg_score: val } : p
+        ),
+      })));
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to save score');
       setNdgScores(prev => ({ ...prev, [pid]: { ...prev[pid], saving: false } }));
@@ -717,28 +724,12 @@ export default function Airlines() {
 
   const handleGenerateSelected = async () => {
     if (checked.size === 0) { toast.error('Select at least one participant'); return; }
-    const toGenerate = allParticipants.filter(p => checked.has(p.id || p._id));
 
-    // Warn about participants whose cert is already generated
-    const alreadyDone = toGenerate.filter(p => p.cert_sequence);
-    const pending     = toGenerate.filter(p => !p.cert_sequence);
-
-    if (alreadyDone.length > 0 && pending.length === 0) {
-      // ALL selected already have certificates
-      toast(
-        `All ${alreadyDone.length} selected participant${alreadyDone.length > 1 ? 's' : ''} already have certificates generated. Use "Revoke Cert" first if you want to regenerate.`,
-        { icon: '⚠️', duration: 5000 }
-      );
+    // Only generate participants that don't have a released certificate yet
+    const toGenerate = allParticipants.filter(p => checked.has(p.id || p._id) && !p.cert_released);
+    if (toGenerate.length === 0) {
+      toast('All selected participants already have released certificates.', { icon: '✅', duration: 4000 });
       return;
-    }
-
-    if (alreadyDone.length > 0) {
-      // SOME already have certificates — confirm to regenerate those + generate pending
-      const names = alreadyDone.map(p => p.participant_name).join(', ');
-      const proceed = window.confirm(
-        `${alreadyDone.length} of the selected participant${alreadyDone.length > 1 ? 's' : ''} already ha${alreadyDone.length > 1 ? 've' : 's'} a certificate:\n${names}\n\nGenerating will OVERWRITE their existing certificate numbers.\n\nContinue with all ${toGenerate.length}? (Or cancel and use "Revoke Cert" to selectively reset first)`
-      );
-      if (!proceed) return;
     }
 
     const fdrNeedsModules = toGenerate.find(p => p.training_type === 'FDR' && !p.modules);

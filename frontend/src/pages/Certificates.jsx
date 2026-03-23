@@ -214,8 +214,12 @@ export default function Certificates() {
   const pendingFdrRecord = useRef(null);
 
   const handleBulkGenerate = async () => {
-    const toGenerate = records.filter(r => selected.has(r.id));
-    if (!toGenerate.length) return;
+    // Only generate participants that are not already released
+    const toGenerate = records.filter(r => selected.has(r.id) && !r.cert_released);
+    if (!toGenerate.length) {
+      toast('All selected participants already have released certificates.', { icon: '\u2705', duration: 4000 });
+      return;
+    }
 
     // If any FDR record has no modules, open module picker for the first one only
     const fdrNeedsModules = toGenerate.find(r => r.training_type === 'FDR' && !r.modules);
@@ -498,10 +502,12 @@ export default function Certificates() {
                         </div>
                         <div>
                           <span className="text-sm font-medium text-primary-800">{record.participant_name}</span>
-                          {record.cert_sequence ? (
-                            <p className="text-[10px] text-emerald-600 font-medium mt-0.5">✓ Cert issued</p>
+                          {record.cert_released ? (
+                            <p className="text-[10px] text-emerald-600 font-medium mt-0.5">✓ Released</p>
+                          ) : record.cert_sequence ? (
+                            <p className="text-[10px] text-blue-500 font-medium mt-0.5">🔒 Generated — not released</p>
                           ) : (
-                            <p className="text-[10px] text-amber-500 mt-0.5">Pending generation</p>
+                            <p className="text-[10px] text-amber-500 mt-0.5">⏳ Pending generation</p>
                           )}
                         </div>
                       </div>
@@ -520,13 +526,12 @@ export default function Certificates() {
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center justify-center gap-2">
-                        {record.cert_sequence ? (
-                          // ── Certificate issued: show Preview + Download ──
+                        {record.cert_released ? (
+                          // Released — show Preview + Download
                           <>
                             <button
                               onClick={() => setRowPreview(record)}
                               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-accent-200 text-xs font-medium text-accent-700 bg-accent-50 hover:bg-accent-100 transition-colors"
-                              title="Preview certificate"
                             >
                               <HiOutlineEye className="w-3.5 h-3.5" />
                               Preview
@@ -535,7 +540,6 @@ export default function Certificates() {
                               onClick={() => handleDownloadIssued(record)}
                               disabled={downloadingId === record.id}
                               className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-emerald-200 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60 transition-colors"
-                              title="Download certificate"
                             >
                               {downloadingId === record.id ? (
                                 <div className="w-3.5 h-3.5 border-2 border-emerald-300 border-t-emerald-600 rounded-full animate-spin" />
@@ -545,10 +549,15 @@ export default function Certificates() {
                               PDF
                             </button>
                           </>
+                        ) : record.cert_sequence ? (
+                          // Generated but not released (revoked state)
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-50 text-blue-600 border border-blue-200">
+                            🔒 Not Released
+                          </span>
                         ) : (
-                          // ── Not yet generated ──
+                          // Never generated
                           <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-50 text-amber-600 border border-amber-200">
-                            Pending
+                            ⏳ Pending
                           </span>
                         )}
                       </div>
@@ -561,9 +570,12 @@ export default function Certificates() {
         </div>
 
         {records.length > 0 && (
-          <div className="px-6 py-3 bg-primary-50/50 border-t border-primary-200">
-            <p className="text-xs text-primary-400">
-              {records.length} record{records.length !== 1 ? 's' : ''} &mdash; {records.filter(r => r.cert_sequence).length} with certificates issued
+        <div className="px-6 py-3 bg-primary-50/50 border-t border-primary-200">
+        <p className="text-xs text-primary-400">
+        {records.length} record{records.length !== 1 ? 's' : ''}
+        {' — '}{records.filter(r => r.cert_released).length} released
+          {records.filter(r => r.cert_sequence && !r.cert_released).length > 0 &&
+              ` — ${records.filter(r => r.cert_sequence && !r.cert_released).length} generated not released`}
               {selected.size > 0 && <span className="ml-2 font-medium text-primary-600">&bull; {selected.size} selected</span>}
             </p>
           </div>

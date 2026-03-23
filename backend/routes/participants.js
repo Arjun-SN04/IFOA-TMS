@@ -502,25 +502,25 @@ router.patch('/:id/validity', async (req, res) => {
 });
 
 // ─── PATCH /:id/revoke-cert (admin only) ─────────────────────────────────────
-// Sets cert_sequence and templateVariant back to null, returning the participant
-// to "Pending" state. The airline will no longer be able to preview/download.
+// Revokes access AND clears cert_sequence so the next generate always assigns
+// a brand-new unique number — the old number is never reused.
 router.patch('/:id/revoke-cert', async (req, res) => {
   try {
     if (req.admin.role === 'airline') {
       return res.status(403).json({ error: 'Only admins can revoke certificates.' });
     }
     const doc = await Participant.findById(req.params.id);
-    if (!doc) return res.status(404).json({ error: 'Participant not found' });
-    if (!doc.cert_sequence) {
-      return res.status(400).json({ error: 'This participant has no certificate to revoke.' });
+    if (!doc) return res.status(404).json({ error: 'Participant not found.' });
+    if (!doc.cert_sequence && !doc.cert_released) {
+      return res.status(400).json({ error: 'No certificate exists to revoke for this participant.' });
     }
-    doc.cert_sequence      = null;
-    doc.templateVariant    = 'default';
-    doc.cert_year_override = null;
-    doc.cert_validity      = '36';
-    doc.cert_released      = false;  // airline loses access immediately
+    // Clear BOTH cert_sequence AND cert_released:
+    // — cert_released = false  → airline immediately loses access
+    // — cert_sequence = null   → next generate() always issues a fresh unique number
+    doc.cert_sequence = null;
+    doc.cert_released = false;
     await doc.save();
-    res.json({ message: `Certificate revoked for ${doc.participant_name}`, participant: doc });
+    res.json({ message: `Certificate revoked for ${doc.participant_name}.`, participant: doc });
   } catch (err) {
     console.error('PATCH revoke-cert error:', err.message);
     res.status(500).json({ error: err.message });

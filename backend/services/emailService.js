@@ -9,7 +9,8 @@ function getTransporter() {
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   if (!host || !user || !pass) {
-    console.warn('[email] SMTP not configured — emails will be skipped.');
+    console.warn('[email] SMTP env vars missing — emails will be skipped.');
+    console.warn(`[email]   SMTP_HOST=${host || '(unset)'} SMTP_USER=${user || '(unset)'} SMTP_PASS=${pass ? '(set)' : '(unset)'}`);
     return null;
   }
   return nodemailer.createTransport({
@@ -22,6 +23,21 @@ function getTransporter() {
     socketTimeout:     30000,
   });
 }
+
+// ─── Verify SMTP connection on startup — logs success/failure clearly ────────
+;(async () => {
+  const t = getTransporter();
+  if (!t) return;
+  try {
+    await t.verify();
+    console.log('✅ [email] SMTP connection verified — ready to send emails');
+  } catch (err) {
+    console.error('❌ [email] SMTP connection FAILED:', err.message);
+    console.error('[email] Check SMTP_HOST / SMTP_USER / SMTP_PASS in your .env');
+    console.error('[email] For Gmail: make sure you are using an App Password, not your account password.');
+    console.error('[email]   Generate one at: https://myaccount.google.com/apppasswords');
+  }
+})();
 
 // ─── Training type labels ─────────────────────────────────────────────────────
 const TRAINING_LABELS = {
@@ -45,8 +61,26 @@ function fmtDate(d) {
 
 // ─── IFOA Logo — dynamically read from disk and encoded as base64 ──────────
 function getLogoBase64() {
-  const logoPath = path.join(__dirname, '..', 'assets', 'logo.png');
-  return fs.readFileSync(logoPath).toString('base64');
+  try {
+    const logoPath = path.join(__dirname, '..', 'assets', 'logo.png');
+    return fs.readFileSync(logoPath).toString('base64');
+  } catch (err) {
+    console.warn('[email] Could not read logo file:', err.message);
+    return null;
+  }
+}
+
+// Build logo attachment only if logo file is available
+function logoAttachment() {
+  const b64 = getLogoBase64();
+  if (!b64) return [];
+  return [{
+    filename:           'ifoa_logo.png',
+    content:            Buffer.from(b64, 'base64'),
+    cid:                'ifoa_logo',
+    contentDisposition: 'inline',
+    contentType:        'image/png',
+  }];
 }
 
 
@@ -280,13 +314,7 @@ async function sendSubmissionConfirmation(opts) {
       subject: `Enrollment Confirmed: ${count} Participant${count !== 1 ? 's' : ''} – ${trainingType} (${typeLabel})`,
       text:    buildConfirmationText(payload),
       html:    buildConfirmationHtml(payload),
-      attachments: [{
-        filename:    'ifoa_logo.png',
-        content:     Buffer.from(getLogoBase64(), 'base64'),
-        cid:         'ifoa_logo',
-        contentDisposition: 'inline',
-        contentType: 'image/png',
-      }],
+      attachments: logoAttachment(),
     });
     console.log(`[email] Confirmation sent to ${toEmail} — messageId: ${info.messageId}`);
   } catch (err) {
@@ -413,13 +441,7 @@ async function sendPasswordResetEmail({ toEmail, airlineName, resetUrl }) {
       subject: 'Reset Your IFOA Airline Portal Password',
       text,
       html,
-      attachments: [{
-        filename:    'ifoa_logo.png',
-        content:     Buffer.from(getLogoBase64(), 'base64'),
-        cid:         'ifoa_logo',
-        contentDisposition: 'inline',
-        contentType: 'image/png',
-      }],
+      attachments: logoAttachment(),
     });
     console.log(`[email] Password reset sent to ${toEmail} — messageId: ${info.messageId}`);
   } catch (err) {
@@ -427,4 +449,102 @@ async function sendPasswordResetEmail({ toEmail, airlineName, resetUrl }) {
   }
 }
 
-module.exports = { sendSubmissionConfirmation, sendPasswordResetEmail };
+// ─── Send OTP verification email ────────────────────────────────────────────────
+async function sendOtpEmail({ toEmail, airlineName, otp }) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn('[email] SMTP not configured — OTP email skipped.');
+    return;
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Verify Your Email – IFOA</title>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Segoe UI',Helvetica,Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:40px 16px">
+  <tr><td align="center">
+    <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.10)">
+      <tr>
+        <td bgcolor="#0c1a2e" style="background:#0c1a2e;padding:28px 40px 24px;text-align:center">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td align="center" bgcolor="#ffffff" style="background:#ffffff;border-radius:12px;padding:16px 20px">
+                <img src="cid:ifoa_logo" width="460" alt="IFOA" style="display:block;border:0;width:460px;max-width:100%;height:auto"/>
+              </td>
+            </tr>
+          </table>
+          <div style="height:16px"></div>
+          <div style="width:40px;height:2px;background:#2563eb;margin:0 auto 14px"></div>
+          <p style="margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:#94a3b8">International Flight Operations Academy</p>
+          <p style="margin:0;font-size:22px;font-weight:800;color:#ffffff">Verify Your Email</p>
+        </td>
+      </tr>
+      <tr><td style="background:linear-gradient(90deg,#2563eb,#3b82f6);height:4px;font-size:0;line-height:0">&nbsp;</td></tr>
+      <tr>
+        <td style="padding:36px 40px 0">
+          <p style="margin:0 0 8px;font-size:16px;font-weight:700;color:#111827">Dear ${airlineName},</p>
+          <p style="margin:0 0 28px;font-size:14px;color:#4b5563;line-height:1.7">
+            Use the one-time code below to verify your email address.
+            This code is valid for <strong style="color:#111827">10 minutes</strong> only.
+          </p>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto 28px">
+            <tr>
+              <td style="background:#eff6ff;border:2px solid #bfdbfe;border-radius:16px;padding:20px 48px;text-align:center">
+                <p style="margin:0;font-size:40px;font-weight:900;color:#1d4ed8;letter-spacing:12px;font-family:monospace">${otp}</p>
+              </td>
+            </tr>
+          </table>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#fef9c3;border:1px solid #fde047;border-radius:10px;margin-bottom:8px">
+            <tr><td style="padding:14px 18px">
+              <p style="margin:0;font-size:13px;color:#854d0e;line-height:1.6">
+                ⚠️ &nbsp;Do not share this code with anyone.
+                If you didn’t request this, please ignore this email.
+              </p>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:28px 40px 32px">
+          <p style="margin:0;font-size:13px;color:#374151;line-height:1.7">
+            Best regards,<br/>
+            <strong style="color:#111827">IFOA Administration Team</strong><br/>
+            <span style="font-size:12px;color:#6b7280">International Flight Operations Academy</span>
+          </p>
+        </td>
+      </tr>
+      <tr>
+        <td bgcolor="#0c1a2e" style="background:#0c1a2e;padding:16px 40px">
+          <p style="margin:0;font-size:11px;color:#64748b;text-align:center">
+            This is an automated email — please do not reply. &nbsp;|&nbsp;
+            &copy; ${new Date().getFullYear()} International Flight Operations Academy
+          </p>
+        </td>
+      </tr>
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>`;
+
+  try {
+    const info = await transporter.sendMail({
+      from:    `"IFOA – International Flight Operations Academy" <${process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER}>`,
+      to:      toEmail,
+      subject: `${otp} — Your IFOA Email Verification Code`,
+      text:    `Your IFOA verification code is: ${otp}\nValid for 10 minutes. Do not share this code.`,
+      html,
+      attachments: logoAttachment(),
+    });
+    console.log(`[email] OTP sent to ${toEmail} — messageId: ${info.messageId}`);
+  } catch (err) {
+    console.error(`[email] FAILED OTP to ${toEmail}:`, err.message);
+    throw err; // let caller handle
+  }
+}
+
+module.exports = { sendSubmissionConfirmation, sendPasswordResetEmail, sendOtpEmail };

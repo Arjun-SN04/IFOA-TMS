@@ -56,6 +56,8 @@ export const downloadIssuedCertificate = (id) =>
 
 // ── Airline Auth ────────────────────────────────────────────────────────────
 export const airlineSignup     = (data) => api.post('/auth/airline/signup', data);
+export const airlineVerifyOtp  = (email, otp) => api.post('/auth/airline/verify-otp', { email, otp });
+export const airlineResendOtp  = (email) => api.post('/auth/airline/resend-otp', { email });
 export const airlineLogin      = (data) => api.post('/auth/airline/login', data);
 export const uploadAirlineLogo = (file) => {
   const fd = new FormData();
