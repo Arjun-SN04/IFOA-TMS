@@ -80,23 +80,21 @@ initDB()
     console.warn('   Some API endpoints may not work until database is reachable');
   });
 
-// Setup routes immediately (they'll handle offline state)
-setTimeout(() => {
-  const participantsRouter    = require('./routes/participants');
-  const certificatesRouter    = require('./routes/certificates');
-  const notificationsRouter   = require('./routes/notifications');
-  const { router: authRouter } = require('./routes/auth');
+// Register routes immediately — they will handle the offline/degraded state themselves
+const participantsRouter    = require('./routes/participants');
+const certificatesRouter    = require('./routes/certificates');
+const notificationsRouter   = require('./routes/notifications');
+const { router: authRouter } = require('./routes/auth');
 
-  app.use('/api/auth', authRouter);
-  app.use('/api/participants', participantsRouter);
-  app.use('/api/certificates', certificatesRouter);
-  app.use('/api/notifications', notificationsRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/participants', participantsRouter);
+app.use('/api/certificates', certificatesRouter);
+app.use('/api/notifications', notificationsRouter);
 
-  // Frontend is served separately (localhost in dev, or its own host in prod).
-  // The backend is API-only — do NOT serve static files from here.
+// Frontend is served separately (localhost in dev, or its own host in prod).
+// The backend is API-only — do NOT serve static files from here.
 
-  app.listen(PORT, () => {
-    console.log(`✅ Server running on port ${PORT}`);
-    console.log(`📡 Database status: ${dbConnected ? 'connected' : 'offline'}`);
-  });
-}, 100);
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`📡 Database status: ${dbConnected ? 'connected' : 'offline'}`);
+});
