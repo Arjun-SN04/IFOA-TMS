@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const Participant = require('./models/Participant');
 const Admin       = require('./models/Admin');
 const Airline     = require('./models/Airline');
-const { CertCounter, reserveCertSequence } = require('./models/CertCounter');
+// CertCounter is required only by the certificates route — not needed here
 
 async function initDB() {
   const mongoUrl = process.env.MONGODB_URL;
@@ -67,52 +67,22 @@ async function initDB() {
     await seedParticipants();
   }
 
-  // Backfill cert_sequence for any existing participants that are missing it.
-  // This handles records created before the CertCounter model was introduced.
-  await backfillCertSequences();
 }
 
 async function seedParticipants() {
+  // Seed participants with NO cert_sequence and cert_released = false.
+  // cert_sequence is only assigned when an admin explicitly clicks Generate.
   const rows = [
-    { first_name: 'John',   last_name: 'Smith',       participant_name: 'John Smith',       company: 'Emirates Airlines', department: 'Flight Operations',  training_type: 'FDI', training_date: '2025-06-15', modules: null,                                                  airline_name: 'Emirates Airlines', locked: true },
-    { first_name: 'Sarah',  last_name: 'Johnson',     participant_name: 'Sarah Johnson',    company: 'Qatar Airways',     department: 'Safety Department',  training_type: 'HF',  training_date: '2025-07-20', modules: null,                                                  airline_name: 'Qatar Airways',     locked: true },
-    { first_name: 'Ahmed',  last_name: 'Al-Rashid',   participant_name: 'Ahmed Al-Rashid',  company: 'Etihad Airways',    department: 'Flight Dispatch',    training_type: 'FDR', training_date: '2025-08-10', modules: 'Air Law,Aircraft Systems,Navigation,Meteorology',    airline_name: 'Etihad Airways',    locked: true },
-    { first_name: 'Maria',  last_name: 'Garcia',      participant_name: 'Maria Garcia',     company: 'Oman Air',          department: 'Operations Control', training_type: 'FDA', training_date: '2025-09-05', modules: null,                                                  airline_name: 'Oman Air',          locked: true },
-    { first_name: 'James',  last_name: 'Wilson',      participant_name: 'James Wilson',     company: 'Gulf Air',          department: 'Flight Operations',  training_type: 'FTL', training_date: '2025-10-12', modules: null,                                                  airline_name: 'Gulf Air',          locked: true },
-    { first_name: 'Fatima', last_name: 'Al-Hassan',   participant_name: 'Fatima Al-Hassan', company: 'Saudi Airlines',    department: 'Flight Dispatch',    training_type: 'NDG', training_date: '2025-11-01', modules: null,                                                  airline_name: 'Saudi Airlines',    locked: true },
+    { first_name: 'John',   last_name: 'Smith',       participant_name: 'John Smith',       company: 'Emirates Airlines', department: 'Flight Operations',  training_type: 'FDI', training_date: '2025-06-15', modules: null,                                               airline_name: 'Emirates Airlines', locked: true, cert_sequence: null, cert_released: false },
+    { first_name: 'Sarah',  last_name: 'Johnson',     participant_name: 'Sarah Johnson',    company: 'Qatar Airways',     department: 'Safety Department',  training_type: 'HF',  training_date: '2025-07-20', modules: null,                                               airline_name: 'Qatar Airways',     locked: true, cert_sequence: null, cert_released: false },
+    { first_name: 'Ahmed',  last_name: 'Al-Rashid',   participant_name: 'Ahmed Al-Rashid',  company: 'Etihad Airways',    department: 'Flight Dispatch',    training_type: 'FDR', training_date: '2025-08-10', modules: 'Air Law,Aircraft Systems,Navigation,Meteorology', airline_name: 'Etihad Airways',    locked: true, cert_sequence: null, cert_released: false },
+    { first_name: 'Maria',  last_name: 'Garcia',      participant_name: 'Maria Garcia',     company: 'Oman Air',          department: 'Operations Control', training_type: 'FDA', training_date: '2025-09-05', modules: null,                                               airline_name: 'Oman Air',          locked: true, cert_sequence: null, cert_released: false },
+    { first_name: 'James',  last_name: 'Wilson',      participant_name: 'James Wilson',     company: 'Gulf Air',          department: 'Flight Operations',  training_type: 'FTL', training_date: '2025-10-12', modules: null,                                               airline_name: 'Gulf Air',          locked: true, cert_sequence: null, cert_released: false },
+    { first_name: 'Fatima', last_name: 'Al-Hassan',   participant_name: 'Fatima Al-Hassan', company: 'Saudi Airlines',    department: 'Flight Dispatch',    training_type: 'NDG', training_date: '2025-11-01', modules: null,                                               airline_name: 'Saudi Airlines',    locked: true, cert_sequence: null, cert_released: false },
   ];
 
-  // Assign cert_sequence to each seed row before inserting
-  for (const row of rows) {
-    row.cert_sequence = await reserveCertSequence(row.training_type);
-  }
-
   await Participant.insertMany(rows);
-  console.log('✅ Participant seed data inserted with cert sequences');
-}
-
-/**
- * Backfill cert_sequence for any participants that were created before
- * the CertCounter model existed. Processes them in creation order so
- * the sequence numbers are assigned chronologically.
- */
-async function backfillCertSequences() {
-  const unsequenced = await Participant.find(
-    { cert_sequence: null },
-    null,
-    { sort: { created_at: 1 } }   // oldest first → sequences are chronological
-  );
-
-  if (unsequenced.length === 0) return;
-
-  console.log(`⏳ Backfilling cert_sequence for ${unsequenced.length} participant(s)…`);
-
-  for (const doc of unsequenced) {
-    doc.cert_sequence = await reserveCertSequence(doc.training_type);
-    await doc.save();
-  }
-
-  console.log(`✅ Backfill complete`);
+  console.log('✅ Participant seed data inserted — all pending admin generation');
 }
 
 module.exports = { initDB, Participant };
