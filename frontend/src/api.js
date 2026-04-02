@@ -50,6 +50,9 @@ export const generateCertificateBlob = (id, params = {}) =>
   api.get(`/certificates/generate/${id}`, { params, responseType: 'blob' });
 export const generateCertificatePost = (id, body = {}) =>
   api.post(`/certificates/generate/${id}`, body, { responseType: 'blob' });
+// Admin: revoke certificate (freeing the cert number for reuse)
+export const revokeCertificateById = (id) =>
+  api.delete(`/certificates/revoke/${id}`);
 // Airline: download already-issued certificate (read-only, no cert_sequence assignment)
 export const downloadIssuedCertificate = (id) =>
   api.get(`/certificates/download/${id}`, { responseType: 'blob' });

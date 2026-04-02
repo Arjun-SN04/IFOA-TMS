@@ -24,6 +24,6 @@
     "uuid": "^11.0.3"
   },
   "devDependencies": {
-    "nodemon": "^3.1.7"
+    "nodemon": "^3.1.14"
   }
 }

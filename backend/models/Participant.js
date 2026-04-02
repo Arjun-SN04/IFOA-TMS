@@ -63,4 +63,14 @@ const participantSchema = new mongoose.Schema(
 );
 
 // NO pre-save hook — participant_name is set explicitly in the route
+
+// ── DB-level uniqueness guard ─────────────────────────────────────────────────
+// Prevents two participants from ever holding the same cert_sequence within the
+// same training_type, even under concurrent writes. sparse:true ignores null values
+// so unissued participants (cert_sequence: null) are not affected.
+participantSchema.index(
+  { training_type: 1, cert_sequence: 1 },
+  { unique: true, sparse: true, name: 'unique_cert_sequence_per_type' }
+);
+
 module.exports = mongoose.model('Participant', participantSchema);

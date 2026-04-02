@@ -1,12 +1,12 @@
+'use strict';
 const express = require('express');
 const router = express.Router();
 const Participant = require('../models/Participant');
 const { generateCertificate, MODULES_LIST } = require('../services/certificateGenerator');
 const { authMiddleware } = require('./auth');
-const { CertCounter, reserveCertSequence } = require('../models/CertCounter');
+const { CertCounter, reserveCertSequence, TO_CODE } = require('../models/CertCounter');
 
-// ── Token auth: accept via header OR ?token= query param ─────────────────────
-// Required for iframe/anchor URLs that cannot set custom headers.
+// -- Token auth: accept via header OR ?token= query param ---------------------
 function certAuth(req, res, next) {
   if (req.query.token && !req.headers.authorization) {
     req.headers.authorization = `Bearer ${req.query.token}`;
@@ -15,18 +15,15 @@ function certAuth(req, res, next) {
 }
 router.use(certAuth);
 
-// ── Is admin ──────────────────────────────────────────────────────────────────
+// -- Is admin -----------------------------------------------------------------
 function isAdmin(req) {
   return req.admin?.role === 'admin' || req.admin?.role === 'Administrator';
 }
 
-// ── Ownership check (airline only) ────────────────────────────────────────────
-// Returns true if the requesting airline account owns this participant record.
+// -- Ownership check (airline only) -------------------------------------------
 function airlineOwns(req, participant) {
   if (req.admin?.role !== 'airline') return false;
-  // Primary: submitted_by ObjectId must match
   if (participant.submitted_by && String(participant.submitted_by) === String(req.admin.id)) return true;
-  // Legacy fallback: records created before submitted_by existed
   if (!participant.submitted_by && req.admin.airlineName) {
     const n = req.admin.airlineName.toLowerCase();
     if ((participant.airline_name || '').toLowerCase() === n) return true;
@@ -35,7 +32,7 @@ function airlineOwns(req, participant) {
   return false;
 }
 
-// ── PDF response headers ──────────────────────────────────────────────────────
+// -- PDF response headers -----------------------------------------------------
 function setPdfHeaders(res, filename, disposition = 'attachment') {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
@@ -43,48 +40,52 @@ function setPdfHeaders(res, filename, disposition = 'attachment') {
   res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length');
 }
 
-// ── Assign a guaranteed-unique cert_sequence ──────────────────────────────────
-// Smart allocation: fills gaps (revoked numbers) first, then assigns next sequential.
-// This is called on every generate, so revoked-then-regenerated certs get the
-// lowest available unused number (filling gaps) or next sequential if no gaps exist.
+// -- Assign a guaranteed-unique cert_sequence ---------------------------------
+// Calls reserveCertSequence which returns the lowest unused number (gap-fill
+// first, then next sequential). After writing we do a final collision check —
+// if another concurrent request beat us to the same number we wipe and retry.
 async function assignNewCertSequence(participant) {
-  const newSeq = await reserveCertSequence(participant.training_type);
+  const code = TO_CODE[participant.training_type] || participant.training_type;
 
-  // Double-check: if by any edge case the number already exists in DB, keep
-  // incrementing until we find a truly free slot (should never happen with the
-  // smart allocation, but belt-and-suspenders).
-  let seq = newSeq;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+  const MAX_RETRIES = 10;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const seq = await reserveCertSequence(participant.training_type);
+
+    // Belt-and-suspenders: check if another participant already holds this number.
+    const aliasTypes = Object.keys(TO_CODE).filter(k => TO_CODE[k] === code);
+    const queryTypes = [...new Set([code, ...aliasTypes])];
+
     const collision = await Participant.findOne({
       _id:           { $ne: participant._id },
-      training_type: participant.training_type,
+      training_type: { $in: queryTypes },
       cert_sequence: seq,
     }).lean();
-    if (!collision) break;
-    console.warn(`[cert] Collision detected for ${participant.training_type} #${seq} — forcing next slot`);
-    // Force-advance the counter and grab the next number
-    const raced = await CertCounter.findOneAndUpdate(
-      { training_type: participant.training_type },
-      { $inc: { seq: 1 } },
-      { upsert: true, new: true }
+
+    if (collision) {
+      console.warn(
+        `[cert] Collision on ${code} #${seq} (attempt ${attempt}/${MAX_RETRIES}) — retrying`
+      );
+      continue;
+    }
+
+    participant.cert_sequence = seq;
+    await participant.save();
+    console.log(
+      `[cert] Assigned #${seq} to ${participant.participant_name} (${code}) on attempt ${attempt}`
     );
-    seq = raced.seq;
+    return seq;
   }
 
-  participant.cert_sequence = seq;
-  await participant.save();
-  return seq;
+  throw new Error(
+    `[cert] Failed to assign a unique cert_sequence for ${code} after ${MAX_RETRIES} attempts.`
+  );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 //  ADMIN ENDPOINTS
-// ═══════════════════════════════════════════════════════════════════════════════
+// =============================================================================
 
-// ── GET /generate/:id ─────────────────────────────────────────────────────────
-// Admin-only. Assigns a BRAND NEW unique cert_sequence every time it is called,
-// sets cert_released = true, and returns the PDF.
-// This is the canonical "release" action.
+// -- GET /generate/:id --------------------------------------------------------
 router.get('/generate/:id', async (req, res) => {
   try {
     if (!isAdmin(req)) {
@@ -94,12 +95,28 @@ router.get('/generate/:id', async (req, res) => {
     const participant = await Participant.findById(req.params.id);
     if (!participant) return res.status(404).json({ error: 'Participant not found.' });
 
-    // Always assign a fresh unique number — never reuse an old one.
-    await assignNewCertSequence(participant);
+    const forceNew = req.query.force === 'true';
+
+    if (!participant.cert_sequence || forceNew) {
+      if (forceNew && participant.cert_sequence) {
+        console.log(
+          `[cert] ?force=true — releasing old #${participant.cert_sequence} for ` +
+          `${participant.participant_name} before assigning new number`
+        );
+        participant.cert_sequence = null;
+        await participant.save();
+      }
+      await assignNewCertSequence(participant);
+    } else {
+      console.log(
+        `[cert] Reusing existing #${participant.cert_sequence} for ` +
+        `${participant.participant_name} (pass ?force=true to reassign)`
+      );
+    }
 
     const incomingVariant = req.query.variant || participant.templateVariant || 'default';
     participant.templateVariant = incomingVariant;
-    participant.cert_released   = true;   // ← RELEASE: airline can now see this
+    participant.cert_released   = true;
     await participant.save();
 
     const data = participant.toObject();
@@ -118,9 +135,7 @@ router.get('/generate/:id', async (req, res) => {
   }
 });
 
-// ── POST /generate/:id ────────────────────────────────────────────────────────
-// Admin-only. Same as GET but accepts modules + templateVariant in body (used
-// for FDR recurrent certs where modules must be supplied).
+// -- POST /generate/:id -------------------------------------------------------
 router.post('/generate/:id', async (req, res) => {
   try {
     if (!isAdmin(req)) {
@@ -130,8 +145,24 @@ router.post('/generate/:id', async (req, res) => {
     const participant = await Participant.findById(req.params.id);
     if (!participant) return res.status(404).json({ error: 'Participant not found.' });
 
-    // Always assign a fresh unique number — never reuse an old one.
-    await assignNewCertSequence(participant);
+    const forceNew = req.query.force === 'true' || req.body.force === true;
+
+    if (!participant.cert_sequence || forceNew) {
+      if (forceNew && participant.cert_sequence) {
+        console.log(
+          `[cert] force=true — releasing old #${participant.cert_sequence} for ` +
+          `${participant.participant_name} before assigning new number`
+        );
+        participant.cert_sequence = null;
+        await participant.save();
+      }
+      await assignNewCertSequence(participant);
+    } else {
+      console.log(
+        `[cert] Reusing existing #${participant.cert_sequence} for ` +
+        `${participant.participant_name} (pass force:true to reassign)`
+      );
+    }
 
     if (req.body.modules) {
       participant.modules = Array.isArray(req.body.modules)
@@ -141,7 +172,7 @@ router.post('/generate/:id', async (req, res) => {
 
     const variant = req.body.templateVariant || req.query.variant || participant.templateVariant || 'default';
     participant.templateVariant = variant;
-    participant.cert_released   = true;   // ← RELEASE: airline can now see this
+    participant.cert_released   = true;
     await participant.save();
 
     const data = participant.toObject();
@@ -160,27 +191,50 @@ router.post('/generate/:id', async (req, res) => {
   }
 });
 
-// ── GET /preview/:id ──────────────────────────────────────────────────────────
-// Admin: full preview regardless of cert_released status.
-// Airline: BLOCKED unless cert_released === true AND they own the record.
+// -- DELETE /revoke/:id -------------------------------------------------------
+router.delete('/revoke/:id', async (req, res) => {
+  try {
+    if (!isAdmin(req)) {
+      return res.status(403).json({ error: 'Certificate revocation is restricted to IFOA administrators.' });
+    }
+
+    const participant = await Participant.findById(req.params.id);
+    if (!participant) return res.status(404).json({ error: 'Participant not found.' });
+
+    const oldSeq = participant.cert_sequence;
+
+    participant.cert_sequence = null;
+    participant.cert_released = false;
+    await participant.save();
+
+    console.log(`[cert] Certificate revoked for ${participant.participant_name}: freed number #${oldSeq}`);
+    res.json({
+      message:          'Certificate revoked successfully',
+      participant_name: participant.participant_name,
+      freedNumber:      oldSeq,
+    });
+  } catch (err) {
+    console.error('[DELETE /revoke] error:', err);
+    res.status(500).json({ error: 'Failed to revoke certificate.' });
+  }
+});
+
+// -- GET /preview/:id ---------------------------------------------------------
 router.get('/preview/:id', async (req, res) => {
   try {
     const participant = await Participant.findById(req.params.id);
     if (!participant) return res.status(404).json({ error: 'Participant not found.' });
 
     if (!isAdmin(req)) {
-      // Airline must own the record
       if (!airlineOwns(req, participant)) {
         return res.status(403).json({ error: 'Access denied.' });
       }
-      // cert_released MUST be true — hard gate
       if (!participant.cert_released) {
         return res.status(403).json({ error: 'Certificate has not been released yet by IFOA.' });
       }
     }
 
     const data = participant.toObject();
-    // Admin-only: allow ad-hoc module override for preview tool
     if (isAdmin(req) && req.query.modules) {
       data.modules = req.query.modules;
     }
@@ -198,25 +252,20 @@ router.get('/preview/:id', async (req, res) => {
   }
 });
 
-// ── GET /download/:id ─────────────────────────────────────────────────────────
-// Airline-facing download. Read-only — never changes any DB fields.
-// Hard-blocked unless cert_released === true AND airline owns the record.
+// -- GET /download/:id --------------------------------------------------------
 router.get('/download/:id', async (req, res) => {
   try {
     const participant = await Participant.findById(req.params.id);
     if (!participant) return res.status(404).json({ error: 'Participant not found.' });
 
-    // Ownership check
     if (!isAdmin(req) && !airlineOwns(req, participant)) {
       return res.status(403).json({ error: 'Access denied.' });
     }
 
-    // cert_released MUST be true — hard gate (applies to both admin and airline)
     if (!participant.cert_released) {
       return res.status(403).json({ error: 'Certificate has not been released yet by IFOA.' });
     }
 
-    // cert_sequence must exist (sanity check — should always be set when released)
     if (!participant.cert_sequence) {
       return res.status(409).json({ error: 'Certificate number not assigned. Please contact IFOA.' });
     }
@@ -237,12 +286,12 @@ router.get('/download/:id', async (req, res) => {
   }
 });
 
-// ── GET /modules ──────────────────────────────────────────────────────────────
+// -- GET /modules -------------------------------------------------------------
 router.get('/modules', (req, res) => {
   res.json(MODULES_LIST);
 });
 
-// ── GET /counters ─────────────────────────────────────────────────────────────
+// -- GET /counters -------------------------------------------------------------
 router.get('/counters', async (req, res) => {
   try {
     if (!isAdmin(req)) return res.status(403).json({ error: 'Admin access required.' });
@@ -253,7 +302,7 @@ router.get('/counters', async (req, res) => {
   }
 });
 
-// ── POST /counters/reset ──────────────────────────────────────────────────────
+// -- POST /counters/reset -----------------------------------------------------
 router.post('/counters/reset', async (req, res) => {
   try {
     if (!isAdmin(req)) {
@@ -267,9 +316,9 @@ router.post('/counters/reset', async (req, res) => {
     const types       = [];
 
     if (req.body.all) {
-      const counters  = await CertCounter.find({}).lean();
-      const ptypes    = await Participant.distinct('training_type');
-      const allTypes  = new Set([...counters.map(c => c.training_type), ...ptypes]);
+      const counters = await CertCounter.find({}).lean();
+      const ptypes   = await Participant.distinct('training_type');
+      const allTypes = new Set([...counters.map(c => c.training_type), ...ptypes]);
       types.push(...allTypes);
     } else {
       if (!req.body.training_type) {
@@ -282,7 +331,6 @@ router.post('/counters/reset', async (req, res) => {
 
     for (const type of types) {
       if (isZeroReset || mode === 'hard') {
-        // Wipe cert data and revoke access for all participants of this type
         await Participant.updateMany(
           { training_type: type },
           { $set: { cert_sequence: null, cert_released: false } }
@@ -290,14 +338,14 @@ router.post('/counters/reset', async (req, res) => {
         const effectiveNext = isZeroReset ? 1 : startFrom;
         await CertCounter.findOneAndUpdate(
           { training_type: type },
-          { $set: { seq: 0, floor: effectiveNext } },
-          { upsert: true }
+          { $set: { high_water: 0, floor: effectiveNext } },
+          { upsert: true, returnDocument: 'after', new: true }
         );
         results.push({
           type,
-          mode: isZeroReset ? 'zero-reset' : 'hard',
+          mode:       isZeroReset ? 'zero-reset' : 'hard',
           nextNumber: effectiveNext,
-          message: isZeroReset
+          message:    isZeroReset
             ? `Full reset. All cert numbers wiped. Next number will be 1.`
             : `All participant cert numbers wiped. Next number: ${startFrom}.`,
         });
@@ -311,13 +359,15 @@ router.post('/counters/reset', async (req, res) => {
         const effectiveStart = Math.max(startFrom, existingMax + 1);
         await CertCounter.findOneAndUpdate(
           { training_type: type },
-          { $set: { seq: effectiveStart - 1, floor: effectiveStart } },
-          { upsert: true }
+          { $set: { high_water: existingMax, floor: effectiveStart } },
+          { upsert: true, returnDocument: 'after', new: true }
         );
         const warning = effectiveStart > startFrom
           ? ` (adjusted to ${effectiveStart} to avoid collision with existing #${existingMax})` : '';
         results.push({
-          type, mode: 'soft', effectiveStart,
+          type,
+          mode: 'soft',
+          effectiveStart,
           message: `Existing numbers preserved. Next new number: ${effectiveStart}${warning}.`,
         });
       }

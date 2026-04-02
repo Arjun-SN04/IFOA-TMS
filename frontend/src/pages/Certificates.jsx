@@ -9,12 +9,14 @@ import {
   HiOutlineCheckCircle,
   HiOutlineX,
   HiOutlineDocumentText,
+  HiOutlineTrash,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 import {
   getParticipants,
   generateCertificateBlob,
   generateCertificateWithModules,
+  revokeCertificateById,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 import ModuleSelector from '../components/ModuleSelector';
@@ -322,6 +324,20 @@ export default function Certificates() {
     }
   };
 
+  // ── Revoke an issued certificate (frees the cert number for reuse) ──────────────
+  const handleRevoke = async (record) => {
+    if (!window.confirm(`Revoke certificate #${record.cert_sequence} for "${record.participant_name}"?\n\nThe certificate number will become available for reassignment.`)) {
+      return;
+    }
+    try {
+      await revokeCertificateById(record.id);
+      toast.success(`Certificate #${record.cert_sequence} revoked. Number is now available for reuse.`);
+      fetchRecords();
+    } catch (err) {
+      toast.error(`Failed to revoke certificate: ${err.response?.data?.error || err.message}`);
+    }
+  };
+
   // Airlines should never reach this page (blocked in router) but show a guard just in case
   if (!isAdmin) {
     return (
@@ -607,6 +623,14 @@ export default function Certificates() {
                                 <HiOutlineDocumentDownload className="w-3.5 h-3.5" />
                               )}
                               PDF
+                            </button>
+                            <button
+                              onClick={() => handleRevoke(record)}
+                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-red-200 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 transition-colors"
+                              title="Revoke certificate and free the number for reuse"
+                            >
+                              <HiOutlineTrash className="w-3.5 h-3.5" />
+                              Revoke
                             </button>
                           </>
                         ) : record.cert_sequence ? (

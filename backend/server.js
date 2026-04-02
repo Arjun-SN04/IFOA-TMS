@@ -68,11 +68,34 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// ── One-time migration: CertCounter seq → high_water ──────────────────────────
+// Old documents used a `seq` field. New code uses `high_water`.
+// This runs once at startup and is a no-op if already migrated.
+async function migrateCertCounters() {
+  try {
+    const CertCounter = mongoose.model('CertCounter');
+    // Find any counter docs that still have `seq` but no `high_water`
+    const old = await CertCounter.find({ seq: { $exists: true }, high_water: { $exists: false } }).lean();
+    if (old.length === 0) return;
+    for (const doc of old) {
+      await CertCounter.updateOne(
+        { _id: doc._id },
+        { $set: { high_water: doc.seq || 0 }, $unset: { seq: '' } }
+      );
+      console.log(`[migration] CertCounter ${doc.training_type}: seq=${doc.seq} → high_water=${doc.seq || 0}`);
+    }
+    console.log(`[migration] Migrated ${old.length} CertCounter document(s) to new high_water schema.`);
+  } catch (err) {
+    console.error('[migration] CertCounter migration failed:', err.message);
+  }
+}
+
 // Start DB initialization but don't block server startup
 initDB()
-  .then(() => {
+  .then(async () => {
     dbConnected = true;
     console.log('✅ Database initialization complete');
+    await migrateCertCounters();
   })
   .catch((err) => {
     dbConnected = false;
