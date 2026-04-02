@@ -44,15 +44,15 @@ function setPdfHeaders(res, filename, disposition = 'attachment') {
 }
 
 // ── Assign a guaranteed-unique cert_sequence ──────────────────────────────────
-// Always calls reserveCertSequence (atomic counter) — never reuses old numbers.
-// This is called on every generate, so revoked-then-regenerated certs always
-// get a fresh number that is not present anywhere else in the DB.
+// Smart allocation: fills gaps (revoked numbers) first, then assigns next sequential.
+// This is called on every generate, so revoked-then-regenerated certs get the
+// lowest available unused number (filling gaps) or next sequential if no gaps exist.
 async function assignNewCertSequence(participant) {
   const newSeq = await reserveCertSequence(participant.training_type);
 
   // Double-check: if by any edge case the number already exists in DB, keep
   // incrementing until we find a truly free slot (should never happen with the
-  // atomic counter, but belt-and-suspenders).
+  // smart allocation, but belt-and-suspenders).
   let seq = newSeq;
   // eslint-disable-next-line no-constant-condition
   while (true) {

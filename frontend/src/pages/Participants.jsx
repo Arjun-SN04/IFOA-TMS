@@ -336,7 +336,15 @@ export default function Participants() {
       if (search) params.search = search;
       if (filterType) params.training_type = filterType;
       const res = await getParticipants(params);
-      setRecords(res.data);
+      
+      // Sort records by creation date (oldest/first entered first)
+      const sorted = res.data.sort((a, b) => {
+        const dateA = a.created_at ? new Date(a.created_at).getTime() : Infinity;
+        const dateB = b.created_at ? new Date(b.created_at).getTime() : Infinity;
+        return dateA - dateB;
+      });
+      
+      setRecords(sorted);
     } catch {
       toast.error('Failed to load records');
     } finally {

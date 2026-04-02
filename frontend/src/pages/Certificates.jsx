@@ -139,6 +139,8 @@ export default function Certificates() {
   const [records, setRecords]         = useState([]);
   const [search, setSearch]           = useState('');
   const [filterType, setFilterType]   = useState('');
+  const [sortBy, setSortBy]           = useState('creation'); // 'creation' | 'name' | 'training_date'
+  const [sortDir, setSortDir]         = useState('asc'); // 'asc' | 'desc'
   const [loading, setLoading]         = useState(true);
   const [moduleModal, setModuleModal] = useState({ open: false, record: null });
   const [selected, setSelected]         = useState(new Set());
@@ -156,7 +158,28 @@ export default function Certificates() {
       if (search) params.search = search;
       if (filterType) params.training_type = filterType;
       const res = await getParticipants(params);
-      setRecords(res.data);
+      
+      // Sort records based on sortBy and sortDir
+      let sorted = [...res.data];
+      sorted.sort((a, b) => {
+        let aVal, bVal;
+        
+        if (sortBy === 'creation') {
+          aVal = a.created_at ? new Date(a.created_at).getTime() : Infinity;
+          bVal = b.created_at ? new Date(b.created_at).getTime() : Infinity;
+        } else if (sortBy === 'name') {
+          aVal = (a.participant_name || '').toLowerCase();
+          bVal = (b.participant_name || '').toLowerCase();
+        } else if (sortBy === 'training_date') {
+          aVal = a.training_date ? new Date(a.training_date).getTime() : Infinity;
+          bVal = b.training_date ? new Date(b.training_date).getTime() : Infinity;
+        }
+        
+        const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+        return sortDir === 'asc' ? comparison : -comparison;
+      });
+      
+      setRecords(sorted);
     } catch {
       toast.error('Failed to load records');
     } finally {
@@ -164,7 +187,7 @@ export default function Certificates() {
     }
   };
 
-  useEffect(() => { fetchRecords(); setSelected(new Set()); }, [filterType, search]);
+  useEffect(() => { fetchRecords(); setSelected(new Set()); }, [filterType, search, sortBy, sortDir]);
 
   const toggleSelect = (id) => {
     setSelected(prev => {
@@ -215,11 +238,18 @@ export default function Certificates() {
 
   const handleBulkGenerate = async () => {
     // Only generate participants that are not already released
-    const toGenerate = records.filter(r => selected.has(r.id) && !r.cert_released);
+    let toGenerate = records.filter(r => selected.has(r.id) && !r.cert_released);
     if (!toGenerate.length) {
       toast('All selected participants already have released certificates.', { icon: '\u2705', duration: 4000 });
       return;
     }
+
+    // Sort by creation date (ascending) so first-entered participants get lowest cert numbers
+    toGenerate = toGenerate.sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : Infinity;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : Infinity;
+      return dateA - dateB;
+    });
 
     // If any FDR record has no modules, open module picker for the first one only
     const fdrNeedsModules = toGenerate.find(r => r.training_type === 'FDR' && !r.modules);
@@ -253,7 +283,15 @@ export default function Certificates() {
     if (!pending) return;
 
     const modulesMap = { [pending.record.id]: modules };
-    const allRecords = [pending.record, ...(pending.rest || [])];
+    let allRecords = [pending.record, ...(pending.rest || [])];
+    
+    // Sort by creation date (ascending) to maintain entry order for cert numbering
+    allRecords = allRecords.sort((a, b) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : Infinity;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : Infinity;
+      return dateA - dateB;
+    });
+    
     await runBulkGenerate(allRecords, modulesMap);
   };
 
@@ -434,6 +472,28 @@ export default function Certificates() {
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
+          </div>
+          
+          {/* Sort Controls */}
+          <div className="flex gap-2">
+            <div className="relative flex-1 sm:flex-none">
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="input-field pr-8 appearance-none cursor-pointer min-w-[180px] text-sm"
+              >
+                <option value="creation">Sort: Upload Time</option>
+                <option value="name">Sort: Name</option>
+                <option value="training_date">Sort: Training Date</option>
+              </select>
+            </div>
+            <button
+              onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}
+              className="px-3 py-2 rounded-lg border border-primary-200 hover:bg-primary-50 text-primary-600 text-sm font-medium transition-colors"
+              title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+            >
+              {sortDir === 'asc' ? '↑' : '↓'}
+            </button>
           </div>
         </div>
       </div>

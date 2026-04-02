@@ -435,6 +435,7 @@ export default function Airlines() {
 
   const [certEdits, setCertEdits]   = useState({});
   const [ndgScores, setNdgScores]   = useState({}); // { [pid]: { value, saving, saved } }
+  const [savingAllNdgScores, setSavingAllNdgScores] = useState(false); // Track bulk save progress
   const [counterModal, setCounterModal] = useState(false);
   const [counters, setCounters]     = useState([]);
   const [resetting, setResetting]   = useState(null);
@@ -464,10 +465,21 @@ export default function Airlines() {
     try {
       setLoading(true);
       const res = await getParticipantsByAirline();
-      setData(res.data);
+      
+      // Sort participants within each airline group by creation date (oldest/first entered first)
+      const sortedData = res.data.map(({ airline, participants }) => ({
+        airline,
+        participants: participants.sort((a, b) => {
+          const dateA = a.created_at ? new Date(a.created_at).getTime() : Infinity;
+          const dateB = b.created_at ? new Date(b.created_at).getTime() : Infinity;
+          return dateA - dateB;
+        }),
+      }));
+      
+      setData(sortedData);
       setExpanded(prev => {
         const init = {};
-        res.data.forEach(({ airline }) => {
+        sortedData.forEach(({ airline }) => {
           const key = airline._id || airline.email || airline.airlineName;
           init[key] = prev[key] ?? false;
         });
@@ -559,6 +571,54 @@ export default function Airlines() {
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to save score');
       setNdgScores(prev => ({ ...prev, [pid]: { ...prev[pid], saving: false } }));
+    }
+  };
+
+  // ── Save all NDG scores at once ────────────────────────────────────────────
+  const handleSaveAllNdgScores = async () => {
+    // Collect all modified NDG scores that need saving
+    const toSave = Object.entries(ndgScores)
+      .filter(([, entry]) => entry && entry.value && !entry.saving)
+      .map(([pid, entry]) => ({ pid, val: Number(entry.value) }))
+      .filter(({ val }) => !isNaN(val) && val >= 0 && val <= 100);
+
+    if (toSave.length === 0) {
+      toast.error('No NDG scores to save');
+      return;
+    }
+
+    setSavingAllNdgScores(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const { pid, val } of toSave) {
+      try {
+        setNdgScores(prev => ({ ...prev, [pid]: { ...prev[pid], saving: true } }));
+        await updateNdgScore(pid, val);
+        
+        // Update local state
+        setNdgScores(prev => ({ ...prev, [pid]: { value: String(val), saving: false, saved: true } }));
+        setData(prev => prev.map(({ airline, participants }) => ({
+          airline,
+          participants: participants.map(p =>
+            (p.id || p._id) === pid ? { ...p, ndg_score: val } : p
+          ),
+        })));
+        successCount++;
+      } catch (err) {
+        setNdgScores(prev => ({ ...prev, [pid]: { ...prev[pid], saving: false } }));
+        failCount++;
+      }
+    }
+
+    setSavingAllNdgScores(false);
+    
+    if (failCount === 0) {
+      toast.success(`${successCount} NDG score${successCount !== 1 ? 's' : ''} saved successfully`);
+    } else if (successCount > 0) {
+      toast.error(`${successCount} saved, ${failCount} failed`);
+    } else {
+      toast.error('Failed to save NDG scores');
     }
   };
 
@@ -943,6 +1003,15 @@ export default function Airlines() {
             {deletingSelected ? <Spin cls="w-3.5 h-3.5 border-2 border-red-300 border-t-red-600" /> : <HiOutlineTrash className="w-3.5 h-3.5" />}
             {deletingSelected ? 'Deleting…' : checked.size > 0 ? `Delete ${checked.size} Candidate${checked.size > 1 ? 's' : ''}` : 'Delete Candidates'}
           </button>
+
+          {/* Save All NDG Scores */}
+          {Object.values(ndgScores).some(entry => entry && entry.value) && (
+            <button onClick={handleSaveAllNdgScores} disabled={savingAllNdgScores}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${!savingAllNdgScores ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-md' : 'bg-amber-300 text-amber-700'}`}>
+              {savingAllNdgScores ? <Spin cls="w-3.5 h-3.5 border-2 border-white/40 border-t-white" /> : <HiOutlineCheckCircle className="w-3.5 h-3.5" />}
+              {savingAllNdgScores ? 'Saving…' : 'Save All NDG Scores'}
+            </button>
+          )}
 
           <div className="flex-1" />
 

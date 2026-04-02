@@ -32,10 +32,11 @@ const ALL_MODULES = [
   'Aircraft Performance', 'Air Traffic Management', 'Principles of Flight',
 ];
 
-const emptyRow = () => ({
+const emptyRow = (defaultNdgSubtype = 'I') => ({
   id: Date.now() + Math.random(),
   first_name: '',
   last_name: '',
+  ndg_subtype: defaultNdgSubtype, // I or R for NDG training overrides
 });
 
 // ─── Single-mode form ─────────────────────────────────────────────────────────
@@ -291,7 +292,7 @@ function SingleForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
 }
 
 // ─── Simple name-only row for bulk mode ──────────────────────────────────────
-function BulkRow({ row, idx, onChange, onRemove, result }) {
+function BulkRow({ row, idx, onChange, onRemove, result, isNDG, defaultNdgSubtype }) {
   const hasError   = result?.status === 'error';
   const hasSuccess = result?.status === 'success';
 
@@ -327,6 +328,27 @@ function BulkRow({ row, idx, onChange, onRemove, result }) {
         placeholder="Last name"
         disabled={hasSuccess}
       />
+
+      {/* NDG Training Type Toggle — only show for NDG training */}
+      {isNDG && (
+        <div className="flex items-center gap-1.5 flex-shrink-0 px-2 py-1 rounded-lg border border-primary-200 bg-primary-50/50">
+          {[{ val: 'I', label: 'I' }, { val: 'R', label: 'R' }].map(opt => (
+            <button
+              key={opt.val}
+              type="button"
+              disabled={hasSuccess}
+              onClick={() => onChange(row.id, 'ndg_subtype', opt.val)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded transition-all ${
+                row.ndg_subtype === opt.val
+                  ? 'bg-accent-500 text-white border border-accent-500'
+                  : 'bg-white text-primary-600 border border-primary-300 hover:border-primary-400'
+              } ${hasSuccess ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Status / remove */}
       <div className="flex items-center gap-2 flex-shrink-0">
@@ -373,7 +395,14 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
     online_synchronous: false, // replaces location with 'Online Synchronous'
   });
 
-  const setSharedField = (field, value) => setShared(prev => ({ ...prev, [field]: value }));
+  const setSharedField = (field, value) => {
+    setShared(prev => ({ ...prev, [field]: value }));
+    // When NDG training type changes, reinitialize all rows with the new default ndg_subtype
+    if (field === 'ndg_subtype') {
+      setRows(prev => prev.map(r => ({ ...r, ndg_subtype: value })));
+    }
+  };
+
   const toggleModule   = (mod) =>
     setShared(prev => ({
       ...prev,
@@ -382,7 +411,7 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
         : [...prev.modules, mod],
     }));
 
-  const addRow    = () => setRows(prev => [...prev, emptyRow()]);
+  const addRow    = () => setRows(prev => [...prev, emptyRow(shared.ndg_subtype)]);
   const removeRow = (id) => {
     if (rows.length === 1) return;
     setRows(prev => prev.filter(r => r.id !== id));
@@ -431,7 +460,7 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
           end_date:           shared.end_date || null,
           location:           shared.online_synchronous ? null : (shared.location || null),
           modules:            shared.modules,
-          ndg_subtype:        shared.ndg_subtype,
+          ndg_subtype:        row.ndg_subtype || shared.ndg_subtype, // Use row-specific override if available
           online_synchronous: shared.online_synchronous,
         });
         setResults(prev => ({ ...prev, [row.id]: { status: 'success' } }));
@@ -639,13 +668,24 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
           <span className="w-6" />
           <span className="flex-1 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">First Name</span>
           <span className="flex-1 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">Last Name</span>
+          {shared.training_type === 'NDG' && (
+            <span className="flex items-center justify-center w-32 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">NDG Type</span>
+          )}
           <span className="w-8" />
         </div>
 
         <AnimatePresence mode="popLayout">
           {rows.map((row, idx) => (
-            <BulkRow key={row.id} row={row} idx={idx}
-              onChange={updateRow} onRemove={removeRow} result={results[row.id]} />
+            <BulkRow
+              key={row.id}
+              row={row}
+              idx={idx}
+              onChange={updateRow}
+              onRemove={removeRow}
+              result={results[row.id]}
+              isNDG={shared.training_type === 'NDG'}
+              defaultNdgSubtype={shared.ndg_subtype}
+            />
           ))}
         </AnimatePresence>
 
