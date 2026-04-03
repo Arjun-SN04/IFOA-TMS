@@ -123,7 +123,6 @@ export default function LandingPage() {
             <motion.div variants={fadeUp} className="mb-6">
               <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border text-xs font-bold tracking-widest uppercase bg-white"
                 style={{ borderColor: '#0000ff40' }}>
-                <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: '#0000ff' }} />
                 <span style={{ color: '#000021' }}>Training</span>
                 <span style={{ color: '#0000ff' }}>Management System</span>
               </span>
