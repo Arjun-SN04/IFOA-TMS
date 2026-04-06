@@ -96,6 +96,10 @@ initDB()
     dbConnected = true;
     console.log('✅ Database initialization complete');
     await migrateCertCounters();
+    // Self-healing: advance any counter whose high_water is behind
+    // the highest cert_sequence actually issued in the participants collection.
+    const { syncHighWater } = require('./models/CertCounter');
+    await syncHighWater();
   })
   .catch((err) => {
     dbConnected = false;

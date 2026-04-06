@@ -181,7 +181,7 @@ router.post('/', async (req, res) => {
       end_date:          end_date  || null,
       location:          online_synchronous ? null : (location || null),
       modules:           modulesStr,
-      cert_sequence:     null,
+      // cert_sequence intentionally omitted — must be absent (not null) for sparse index
       ndg_subtype:       training_type === 'NDG' ? (ndg_subtype || 'I') : 'I',
       online_synchronous: !!online_synchronous,
       airline_name: req.admin.role === 'airline'
@@ -249,7 +249,7 @@ router.post('/bulk', async (req, res) => {
           end_date:          end_date || null,
           location:          online_synchronous ? null : (location || null),
           modules:           modulesStr,
-          cert_sequence:     null,
+          // cert_sequence intentionally omitted — must be absent (not null) for sparse index
           ndg_subtype:       training_type === 'NDG' ? (ndg_subtype || 'I') : 'I',
           online_synchronous: !!online_synchronous,
           airline_name: req.admin.role === 'airline'
@@ -516,11 +516,13 @@ router.patch('/:id/revoke-cert', async (req, res) => {
     }
     // Clear BOTH cert_sequence AND cert_released:
     // — cert_released = false  → airline immediately loses access
-    // — cert_sequence = null   → next generate() always issues a fresh unique number
-    doc.cert_sequence = null;
-    doc.cert_released = false;
-    await doc.save();
-    res.json({ message: `Certificate revoked for ${doc.participant_name}.`, participant: doc });
+    // — $unset cert_sequence   → field fully absent (not null) so sparse index ignores it
+    await Participant.updateOne(
+      { _id: doc._id },
+      { $unset: { cert_sequence: '' }, $set: { cert_released: false } }
+    );
+    const updated = await Participant.findById(doc._id);
+    res.json({ message: `Certificate revoked for ${doc.participant_name}.`, participant: updated });
   } catch (err) {
     console.error('PATCH revoke-cert error:', err.message);
     res.status(500).json({ error: err.message });
