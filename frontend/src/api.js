@@ -1,8 +1,12 @@
 import axios from 'axios';
 
-const API_BASE = (import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim())
-  ? import.meta.env.VITE_API_URL.trim()
-  : '/api';
+// In local development always go through Vite proxy (/api -> localhost:5000).
+// This avoids accidentally pointing dev to a remote/stale backend via .env.
+const API_BASE = import.meta.env.DEV
+  ? '/api'
+  : ((import.meta.env.VITE_API_URL && import.meta.env.VITE_API_URL.trim())
+      ? import.meta.env.VITE_API_URL.trim()
+      : '/api');
 
 const api = axios.create({
   baseURL: API_BASE,

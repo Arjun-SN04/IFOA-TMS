@@ -97,7 +97,7 @@ router.post('/login', async (req, res) => {
     await admin.save();
 
     const token = jwt.sign(
-      { id: admin._id, email: admin.email, name: admin.name, role: 'admin' },
+      { id: admin._id, email: admin.email, name: admin.name, role: 'admin', organization: admin.organization },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -354,9 +354,20 @@ router.put('/profile', authMiddleware, async (req, res) => {
     const user = await Model.findById(req.admin.id);
     if (!user) return res.status(404).json({ error: 'User not found.' });
 
-    const { name, currentPassword, newPassword, newEmail, logo_url } = req.body;
+    const { name, currentPassword, newPassword, newEmail, logo_url, organization, airlineName } = req.body;
     if (name && name.trim()) user.name = name.trim();
     if (logo_url !== undefined && req.admin.role === 'airline') user.logo_url = logo_url || null;
+
+    if (organization !== undefined && req.admin.role !== 'airline') {
+      return res.status(403).json({ error: 'Only airline users can edit organization.' });
+    }
+
+    // For airlines: airlineName is their "organization" — update it
+    if (req.admin.role === 'airline') {
+      if (airlineName !== undefined && airlineName.trim()) user.airlineName = airlineName.trim();
+      // Also support sending it as 'organization' from the frontend
+      else if (organization !== undefined && organization.trim()) user.airlineName = organization.trim();
+    }
 
     if (newPassword) {
       if (!currentPassword)
@@ -386,12 +397,12 @@ router.put('/profile', authMiddleware, async (req, res) => {
 
     await user.save();
     const role = req.admin.role === 'airline' ? 'airline' : 'admin';
-    const token = jwt.sign(
-      { id: user._id, email: user.email, name: user.name, role },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const tokenPayload = role === 'airline'
+      ? { id: user._id, email: user.email, name: user.name, airlineName: user.airlineName, role }
+      : { id: user._id, email: user.email, name: user.name, role, organization: user.organization };
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
 
+    // Return the full updated user so the frontend state is always in sync
     res.json({ token, admin: { ...user.toJSON(), role } });
   } catch (err) {
     res.status(500).json({ error: 'Server error updating profile.' });
