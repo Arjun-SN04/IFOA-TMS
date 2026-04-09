@@ -7,6 +7,8 @@ import {
   HiOutlineEye,
   HiOutlineShieldCheck,
   HiOutlineCheckCircle,
+  HiOutlineLockClosed,
+  HiOutlineClock,
   HiOutlineX,
   HiOutlineDocumentText,
   HiOutlineTrash,
@@ -579,11 +581,20 @@ export default function Certificates() {
                         <div>
                           <span className="text-sm font-medium text-primary-800">{record.participant_name}</span>
                           {record.cert_released ? (
-                            <p className="text-[10px] text-emerald-600 font-medium mt-0.5">✓ Released</p>
+                            <p className="text-[10px] text-emerald-600 font-medium mt-0.5 inline-flex items-center gap-1">
+                              <HiOutlineCheckCircle className="w-3 h-3" />
+                              Released
+                            </p>
                           ) : record.cert_sequence ? (
-                            <p className="text-[10px] text-blue-500 font-medium mt-0.5">🔒 Generated — not released</p>
+                            <p className="text-[10px] text-blue-500 font-medium mt-0.5 inline-flex items-center gap-1">
+                              <HiOutlineLockClosed className="w-3 h-3" />
+                              Generated - not released
+                            </p>
                           ) : (
-                            <p className="text-[10px] text-amber-500 mt-0.5">⏳ Pending generation</p>
+                            <p className="text-[10px] text-amber-500 mt-0.5 inline-flex items-center gap-1">
+                              <HiOutlineClock className="w-3 h-3" />
+                              Pending generation
+                            </p>
                           )}
                         </div>
                       </div>
@@ -635,13 +646,15 @@ export default function Certificates() {
                           </>
                         ) : record.cert_sequence ? (
                           // Generated but not released (revoked state)
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-50 text-blue-600 border border-blue-200">
-                            🔒 Not Released
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-blue-50 text-blue-600 border border-blue-200">
+                            <HiOutlineLockClosed className="w-3.5 h-3.5" />
+                            Not Released
                           </span>
                         ) : (
                           // Never generated
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-50 text-amber-600 border border-amber-200">
-                            ⏳ Pending
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-amber-50 text-amber-600 border border-amber-200">
+                            <HiOutlineClock className="w-3.5 h-3.5" />
+                            Pending
                           </span>
                         )}
                       </div>
@@ -668,3 +681,4 @@ export default function Certificates() {
     </motion.div>
   );
 }
+

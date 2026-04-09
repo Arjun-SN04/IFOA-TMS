@@ -13,6 +13,8 @@ import {
   HiOutlineMail,
   HiOutlineDocumentDownload,
   HiOutlineEye,
+  HiOutlineLockClosed,
+  HiOutlineClock,
   HiOutlineCheckCircle,
   HiOutlineX,
   HiOutlineDocumentText,
@@ -1385,3 +1387,4 @@ export default function Airlines() {
     </motion.div>
   );
 }
+
