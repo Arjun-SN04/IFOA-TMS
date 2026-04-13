@@ -8,13 +8,15 @@ import {
   HiOutlineOfficeBuilding,
   HiOutlineChevronLeft,
   HiOutlineChevronRight,
+  HiOutlineClipboardList,
 } from 'react-icons/hi';
 import { useAuth } from '../context/AuthContext';
 
 const adminNavigation = [
-  { name: 'Dashboard', href: '/admin',          icon: HiOutlineHome },
-  { name: 'Airlines',  href: '/admin/airlines', icon: HiOutlineOfficeBuilding },
-  { name: 'Profile',   href: '/admin/profile',  icon: HiOutlineUserCircle },
+  { name: 'Dashboard',    href: '/admin',               icon: HiOutlineHome },
+  { name: 'Airlines',     href: '/admin/airlines',      icon: HiOutlineOfficeBuilding },
+  { name: 'Exam Results', href: '/admin/exam-results',  icon: HiOutlineClipboardList },
+  { name: 'Profile',      href: '/admin/profile',       icon: HiOutlineUserCircle },
 ];
 
 const airlineNavigation = [

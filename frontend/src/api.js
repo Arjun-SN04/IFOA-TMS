@@ -108,4 +108,29 @@ export const generateCertificateWithModules = (id, modules, variant = 'default')
 export const forgotPassword = (email)                          => api.post('/auth/airline/forgot-password', { email });
 export const resetPassword  = (email, token, newPassword)      => api.post('/auth/airline/reset-password', { email, token, newPassword });
 
+// ── Exam Results ─────────────────────────────────────────────────────────────
+export const getExamResults        = (params)               => api.get('/exam-results', { params });
+export const getExamBatches        = ()                     => api.get('/exam-results/batches');
+export const getExamResult         = (id)                   => api.get(`/exam-results/${id}`);
+export const createExamResult      = (data)                 => api.post('/exam-results', data);
+export const bulkCreateExamResults = (rows)                 => api.post('/exam-results/bulk', rows);
+export const updateExamResult      = (id, data)             => api.put(`/exam-results/${id}`, data);
+export const issueResultSheet      = (id, date)             => api.patch(`/exam-results/${id}/issue-sheet`, { sheet_date: date });
+export const deleteExamResult      = (id)                   => api.delete(`/exam-results/${id}`);
+
+// Excel import helpers
+export const parseExamResultsExcel = (file) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  return api.post('/exam-results/parse-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+export const importExamResultsExcel = (file, meta) => {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (meta.batch_name)  fd.append('batch_name',  meta.batch_name);
+  if (meta.course_type) fd.append('course_type', meta.course_type);
+  if (meta.company)     fd.append('company',     meta.company);
+  return api.post('/exam-results/import-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+
 export default api;
