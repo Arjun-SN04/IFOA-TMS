@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
   HiOutlineUserCircle,
@@ -30,6 +30,15 @@ export default function Profile() {
   const [emailPassword, setEmailPassword] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [saving, setSaving] = useState(false);
+  const [editingAirlineName, setEditingAirlineName] = useState(false);
+  const [airlineName, setAirlineName] = useState(admin?.airlineName || '');
+
+  // Keep local states in sync if the auth context admin object changes
+  // Only update when NOT currently editing to avoid overwriting in-progress input
+  useEffect(() => {
+    if (!editingAirlineName && admin?.airlineName) setAirlineName(admin.airlineName);
+    if (!editingName && admin?.name)              setName(admin.name);
+  }, [admin]);
 
   const [logoFile, setLogoFile]           = useState(null);
   const [logoPreview, setLogoPreview]     = useState(null);
@@ -80,6 +89,27 @@ export default function Profile() {
       setEditingName(false);
     } catch (err) {
       toast.error(err.response?.data?.error || 'Failed to update name');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAirlineNameSave = async () => {
+    const nextName = airlineName.trim();
+    if (!nextName) return toast.error('Airline name cannot be empty');
+    setSaving(true);
+    try {
+      // Send both keys for compatibility with older backend handlers.
+      const res = await updateProfile({ airlineName: nextName, organization: nextName });
+      const savedName = res.data.admin?.airlineName || nextName;
+
+      // Keep UI state and auth context aligned even if response omits airlineName.
+      setAirlineName(savedName);
+      updateAdmin(res.data.token, { ...admin, ...res.data.admin, airlineName: savedName });
+      toast.success('Airline name updated successfully');
+      setEditingAirlineName(false);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to update airline name');
     } finally {
       setSaving(false);
     }
@@ -205,13 +235,43 @@ export default function Profile() {
             <div className="w-9 h-9 bg-primary-100 rounded-lg flex items-center justify-center flex-shrink-0">
               <HiOutlineUserCircle className="w-5 h-5 text-primary-600" />
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-primary-400 uppercase tracking-wider">Organization</p>
-              <p className="text-sm font-medium text-primary-800 truncate">
-                {isAdmin
-                  ? (admin?.organization || 'IFOA - International Flight Operations Academy')
-                  : (admin?.airlineName || admin?.name || 'Airline')}
-              </p>
+              {!isAdmin && editingAirlineName ? (
+                <div className="flex flex-wrap items-center gap-2 mt-1">
+                  <input
+                    type="text"
+                    value={airlineName}
+                    onChange={(e) => setAirlineName(e.target.value)}
+                    className="border border-primary-200 rounded-lg px-3 py-1.5 text-sm text-primary-800 focus:outline-none focus:ring-2 focus:ring-accent-400 w-full sm:w-auto min-w-0 sm:min-w-[200px]"
+                    autoFocus
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={handleAirlineNameSave} disabled={saving}
+                      className="px-3 py-1.5 bg-accent-600 text-white text-xs font-medium rounded-lg hover:bg-accent-700 disabled:opacity-50">
+                      {saving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button onClick={() => { setEditingAirlineName(false); setAirlineName(admin?.airlineName || ''); }}
+                      className="px-3 py-1.5 bg-primary-100 text-primary-600 text-xs font-medium rounded-lg hover:bg-primary-200">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-primary-800 truncate">
+                    {isAdmin
+                      ? (admin?.organization || 'IFOA - International Flight Operations Academy')
+                      : (admin?.airlineName || admin?.name || 'Airline')}
+                  </p>
+                  {!isAdmin && (
+                    <button onClick={() => { setEditingAirlineName(true); setAirlineName(admin?.airlineName || ''); }}
+                      className="p-1 text-primary-400 hover:text-primary-600 rounded-lg hover:bg-primary-100 flex-shrink-0">
+                      <HiOutlinePencil className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

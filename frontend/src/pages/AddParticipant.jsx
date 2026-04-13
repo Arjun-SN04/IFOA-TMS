@@ -32,10 +32,21 @@ const ALL_MODULES = [
   'Aircraft Performance', 'Air Traffic Management', 'Principles of Flight',
 ];
 
-const emptyRow = (defaultNdgSubtype = 'I') => ({
+const DEPARTMENT_OPTIONS = [
+  'Flight Operations',
+  'OCC',
+  'Crew Control',
+  'Reservation',
+  'Compliance Monitoring',
+  'Training',
+  'Ground Operations',
+];
+
+const emptyRow = (defaultNdgSubtype = 'I', defaultDepartment = '') => ({
   id: Date.now() + Math.random(),
   first_name: '',
   last_name: '',
+  department: defaultDepartment,
   ndg_subtype: defaultNdgSubtype, // I or R for NDG training overrides
 });
 
@@ -292,9 +303,10 @@ function SingleForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
 }
 
 // ─── Simple name-only row for bulk mode ──────────────────────────────────────
-function BulkRow({ row, idx, onChange, onRemove, result, isNDG, defaultNdgSubtype }) {
+function BulkRow({ row, idx, onChange, onRemove, result, isNDG, ndgMode, departmentMode }) {
   const hasError   = result?.status === 'error';
   const hasSuccess = result?.status === 'success';
+  const canEditNdgSubtype = isNDG && ndgMode === 'M' && !hasSuccess;
 
   return (
     <motion.div
@@ -329,20 +341,35 @@ function BulkRow({ row, idx, onChange, onRemove, result, isNDG, defaultNdgSubtyp
         disabled={hasSuccess}
       />
 
+      {/* Department per row — only in manual mode */}
+      {departmentMode === 'manual' && (
+        <select
+          value={row.department || ''}
+          onChange={e => onChange(row.id, 'department', e.target.value)}
+          className="input-field text-sm w-40 sm:w-44 appearance-none cursor-pointer"
+          disabled={hasSuccess}
+        >
+          <option value="">Department</option>
+          {DEPARTMENT_OPTIONS.map(dep => (
+            <option key={dep} value={dep}>{dep}</option>
+          ))}
+        </select>
+      )}
+
       {/* NDG Training Type Toggle — only show for NDG training */}
       {isNDG && (
-        <div className="flex items-center gap-1.5 flex-shrink-0 px-2 py-1 rounded-lg border border-primary-200 bg-primary-50/50">
+        <div className="w-[84px] flex items-center justify-center gap-1.5 flex-shrink-0 px-2 py-1 rounded-lg border border-primary-200 bg-primary-50/50">
           {[{ val: 'I', label: 'I' }, { val: 'R', label: 'R' }].map(opt => (
             <button
               key={opt.val}
               type="button"
-              disabled={hasSuccess}
+              disabled={!canEditNdgSubtype}
               onClick={() => onChange(row.id, 'ndg_subtype', opt.val)}
               className={`px-2.5 py-1 text-xs font-semibold rounded transition-all ${
                 row.ndg_subtype === opt.val
                   ? 'bg-accent-500 text-white border border-accent-500'
                   : 'bg-white text-primary-600 border border-primary-300 hover:border-primary-400'
-              } ${hasSuccess ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              } ${!canEditNdgSubtype ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
             >
               {opt.label}
             </button>
@@ -376,7 +403,7 @@ function BulkRow({ row, idx, onChange, onRemove, result, isNDG, defaultNdgSubtyp
 
 // ─── Bulk mode form ───────────────────────────────────────────────────────────
 function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
-  const [rows, setRows]       = useState([emptyRow(), emptyRow(), emptyRow()]);
+  const [rows, setRows]       = useState([emptyRow('I', ''), emptyRow('I', ''), emptyRow('I', '')]);
   const [company, setCompany]           = useState(isAdmin ? '' : (airlineName || ''));
   const [customCompany, setCustomCompany] = useState('');
   const [saving, setSaving]              = useState(false);
@@ -385,21 +412,26 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
 
   // ── Shared session fields (apply to ALL participants) ──
   const [shared, setShared] = useState({
+    department_mode:   'same', // same | manual
     department:        '',
     training_type:     '',
     training_date:     '',
     end_date:          '',
     location:          '',
     modules:           [],
-    ndg_subtype:       'I',    // I = Initial, R = Recurrent (NDG only)
+    ndg_mode:          'I',    // I = Initial, R = Recurrent, M = Mixed
     online_synchronous: false, // replaces location with 'Online Synchronous'
   });
 
   const setSharedField = (field, value) => {
     setShared(prev => ({ ...prev, [field]: value }));
-    // When NDG training type changes, reinitialize all rows with the new default ndg_subtype
-    if (field === 'ndg_subtype') {
+    // Initial/Recurrent enforce one subtype for all rows; Mixed allows per-row toggle.
+    if (field === 'ndg_mode' && value !== 'M') {
       setRows(prev => prev.map(r => ({ ...r, ndg_subtype: value })));
+    }
+    // If switching to same department mode, clear row-level departments.
+    if (field === 'department_mode' && value === 'same') {
+      setRows(prev => prev.map(r => ({ ...r, department: '' })));
     }
   };
 
@@ -411,7 +443,7 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
         : [...prev.modules, mod],
     }));
 
-  const addRow    = () => setRows(prev => [...prev, emptyRow(shared.ndg_subtype)]);
+  const addRow    = () => setRows(prev => [...prev, emptyRow(shared.ndg_mode === 'R' ? 'R' : 'I', '')]);
   const removeRow = (id) => {
     if (rows.length === 1) return;
     setRows(prev => prev.filter(r => r.id !== id));
@@ -424,7 +456,10 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
     e.preventDefault();
     const effectiveCompany = company === '__other__' ? customCompany.trim() : company.trim();
     if (isAdmin && !effectiveCompany) { toast.error('Please enter the airline name'); return; }
-    if (!shared.department.trim())  { toast.error('Please enter the department'); return; }
+    if (shared.department_mode === 'same' && !shared.department.trim()) {
+      toast.error('Please choose the department');
+      return;
+    }
     if (!shared.training_type)      { toast.error('Please select a training type'); return; }
     if (!shared.training_date)      { toast.error('Please select a start date'); return; }
 
@@ -442,6 +477,21 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
       return;
     }
 
+    if (shared.department_mode === 'manual') {
+      const missingDept = pending.filter(r => !String(r.department || '').trim());
+      if (missingDept.length > 0) {
+        toast.error(`${missingDept.length} row${missingDept.length > 1 ? 's are' : ' is'} missing a department`);
+        setResults(prev => {
+          const n = { ...prev };
+          missingDept.forEach(r => {
+            n[r.id] = { status: 'error', error: 'Department required' };
+          });
+          return n;
+        });
+        return;
+      }
+    }
+
     setSaving(true);
     let successCount = 0, failCount = 0;
     // Track saved participants in a plain local array (React state updates are async
@@ -454,13 +504,13 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
           first_name:         row.first_name.trim(),
           last_name:          row.last_name.trim(),
           company:            isAdmin ? effectiveCompany : airlineName,
-          department:         shared.department.trim(),
+          department:         shared.department_mode === 'manual' ? row.department.trim() : shared.department.trim(),
           training_type:      shared.training_type,
           training_date:      shared.training_date,
           end_date:           shared.end_date || null,
           location:           shared.online_synchronous ? null : (shared.location || null),
           modules:            shared.modules,
-          ndg_subtype:        row.ndg_subtype || shared.ndg_subtype, // Use row-specific override if available
+          ndg_subtype:        shared.ndg_mode === 'M' ? row.ndg_subtype : shared.ndg_mode,
           online_synchronous: shared.online_synchronous,
         });
         setResults(prev => ({ ...prev, [row.id]: { status: 'success' } }));
@@ -468,7 +518,7 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
         savedParticipants.push({
           first_name: row.first_name.trim(),
           last_name:  row.last_name.trim(),
-          department: shared.department.trim(),
+          department: shared.department_mode === 'manual' ? row.department.trim() : shared.department.trim(),
         });
         successCount++;
       } catch (err) {
@@ -541,8 +591,34 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="label">Department *</label>
-            <input value={shared.department} onChange={e => setSharedField('department', e.target.value)}
-              className="input-field" placeholder="e.g. Flight Operations" />
+            <select
+              value={shared.department_mode}
+              onChange={e => setSharedField('department_mode', e.target.value)}
+              className="input-field appearance-none cursor-pointer"
+            >
+              <option value="same">Single Department for All Participants</option>
+              <option value="manual">Department per Participant</option>
+            </select>
+
+            {shared.department_mode === 'same' && (
+              <div className="mt-2">
+                <label className="text-[10px] font-semibold text-primary-400 uppercase tracking-wider">Choose Department</label>
+                <select
+                  value={shared.department}
+                  onChange={e => setSharedField('department', e.target.value)}
+                  className="input-field mt-1 appearance-none cursor-pointer"
+                >
+                  <option value="">Choose department</option>
+                  {DEPARTMENT_OPTIONS.map(dep => (
+                    <option key={dep} value={dep}>{dep}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {shared.department_mode === 'manual' && (
+              <p className="text-[10px] text-primary-400 mt-1.5">Department will be selected beside each participant row.</p>
+            )}
           </div>
           <div>
             <label className="label">Training Type *</label>
@@ -574,24 +650,28 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
           <div>
             <label className="label">NDG Training Type *</label>
             <div className="flex gap-3">
-              {[{ val: 'I', label: 'I — Initial' }, { val: 'R', label: 'R — Recurrent' }].map(opt => (
+              {[{ val: 'I', label: 'I — Initial' }, { val: 'R', label: 'R — Recurrent' }, { val: 'M', label: 'Mixed' }].map(opt => (
                 <button key={opt.val} type="button"
-                  onClick={() => setSharedField('ndg_subtype', opt.val)}
+                  onClick={() => setSharedField('ndg_mode', opt.val)}
                   className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 text-sm font-semibold transition-all ${
-                    shared.ndg_subtype === opt.val
+                    shared.ndg_mode === opt.val
                       ? 'border-accent-500 bg-accent-50 text-accent-700'
                       : 'border-primary-200 text-primary-500 hover:border-primary-400'
                   }`}>
                   <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                    shared.ndg_subtype === opt.val ? 'border-accent-500' : 'border-primary-300'
+                    shared.ndg_mode === opt.val ? 'border-accent-500' : 'border-primary-300'
                   }`}>
-                    {shared.ndg_subtype === opt.val && <div className="w-2.5 h-2.5 rounded-full bg-accent-500" />}
+                    {shared.ndg_mode === opt.val && <div className="w-2.5 h-2.5 rounded-full bg-accent-500" />}
                   </div>
                   {opt.label}
                 </button>
               ))}
             </div>
-            <p className="text-[10px] text-primary-400 mt-1.5">Applies to all participants in this group</p>
+            <p className="text-[10px] text-primary-400 mt-1.5">
+              {shared.ndg_mode === 'M'
+                ? 'Mixed selected: each participant row can choose I or R.'
+                : 'Initial/Recurrent selected: all participants in this group will use the same NDG type.'}
+            </p>
           </div>
         )}
 
@@ -664,12 +744,15 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
         </div>
 
         {/* Column header */}
-        <div className="flex items-center gap-3 px-4">
+        <div className="flex items-center gap-2 sm:gap-3 px-3 sm:px-4">
           <span className="w-6" />
           <span className="flex-1 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">First Name</span>
           <span className="flex-1 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">Last Name</span>
+          {shared.department_mode === 'manual' && (
+            <span className="w-40 sm:w-44 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">Department</span>
+          )}
           {shared.training_type === 'NDG' && (
-            <span className="flex items-center justify-center w-32 text-[10px] font-semibold text-primary-400 uppercase tracking-wider">NDG Type</span>
+            <span className="flex items-center justify-center w-[84px] text-[10px] font-semibold text-primary-400 uppercase tracking-wider">NDG Type</span>
           )}
           <span className="w-8" />
         </div>
@@ -684,7 +767,8 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
               onRemove={removeRow}
               result={results[row.id]}
               isNDG={shared.training_type === 'NDG'}
-              defaultNdgSubtype={shared.ndg_subtype}
+              ndgMode={shared.ndg_mode}
+              departmentMode={shared.department_mode}
             />
           ))}
         </AnimatePresence>

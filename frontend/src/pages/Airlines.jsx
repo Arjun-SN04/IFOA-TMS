@@ -13,6 +13,8 @@ import {
   HiOutlineMail,
   HiOutlineDocumentDownload,
   HiOutlineEye,
+  HiOutlineLockClosed,
+  HiOutlineClock,
   HiOutlineCheckCircle,
   HiOutlineX,
   HiOutlineDocumentText,
@@ -194,6 +196,13 @@ function CertResultModal({ results, onClose }) {
   );
 }
 
+// Every type has its own independent counter — no sharing.
+const TYPE_TO_BUCKET = {
+  FDI: 'FDI', FDA: 'FDA', GD: 'GD', TCD: 'TCD',
+  HF:  'HF',  NDG: 'NDG',
+  FDR: 'FDR', FTL: 'FTL',
+};
+
 // ─── Counter Reset Modal ──────────────────────────────────────────────────────
 function CounterResetModal({ open, onClose, counters, ALL_TYPES, resetting, onReset, onResetAll }) {
   if (!open) return null;
@@ -232,12 +241,25 @@ function CounterResetModal({ open, onClose, counters, ALL_TYPES, resetting, onRe
           {/* ── Scrollable counter list ── */}
           <div className="px-4 sm:px-5 py-4 space-y-2 overflow-y-auto max-h-[45vh] sm:max-h-[50vh]">
             {ALL_TYPES.map(type => {
-              const current = counters.find(c => c.training_type === type)?.seq ?? 0;
+              // Look up by canonical bucket
+              const bucket  = TYPE_TO_BUCKET[type] || type;
+              const counter = counters.find(c => c.training_type === bucket);
+              // Show 'active' = highest cert_sequence on a live participant right now.
+              // Falls back to high_water if active is not yet returned by the API.
+              // This number decreases when certs are revoked or participants deleted.
+              const current = counter?.active ?? counter?.high_water ?? 0;
+              const certCount = counter?.activeCount ?? null;
               return (
                 <div key={type} className="flex items-center justify-between px-3 sm:px-4 py-3 rounded-xl bg-primary-50 border border-primary-100">
                   <div>
                     <span className="text-sm font-bold text-primary-800">{type}</span>
                     <span className="ml-2 text-xs text-primary-400">#{String(current).padStart(5, '0')}</span>
+                    {certCount !== null && certCount > 0 && (
+                      <span className="ml-1.5 text-[10px] text-primary-400">({certCount} active)</span>
+                    )}
+                    {certCount === 0 && (
+                      <span className="ml-1.5 text-[10px] text-emerald-500">(none active)</span>
+                    )}
                   </div>
                   <button onClick={() => onReset(type)} disabled={resetting === type || resetting === 'ALL'}
                     className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-red-200 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors whitespace-nowrap">
@@ -1365,3 +1387,4 @@ export default function Airlines() {
     </motion.div>
   );
 }
+

@@ -51,13 +51,10 @@ async function assignNewCertSequence(participant) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const seq = await reserveCertSequence(participant.training_type);
 
-    // Belt-and-suspenders: check if another participant already holds this number.
-    const aliasTypes = Object.keys(TO_CODE).filter(k => TO_CODE[k] === code);
-    const queryTypes = [...new Set([code, ...aliasTypes])];
-
+    // Belt-and-suspenders: check if another participant of the SAME type already holds this number.
     const collision = await Participant.findOne({
       _id:           { $ne: participant._id },
-      training_type: { $in: queryTypes },
+      training_type: code,
       cert_sequence: seq,
     }).lean();
 
@@ -203,9 +200,13 @@ router.delete('/revoke/:id', async (req, res) => {
 
     const oldSeq = participant.cert_sequence;
 
-    participant.cert_sequence = null;
-    participant.cert_released = false;
-    await participant.save();
+    // Use $unset so cert_sequence is fully absent (not null) — required for the
+    // sparse unique index to ignore this document. Setting null would store a
+    // value and cause E11000 duplicate key errors across multiple participants.
+    await Participant.updateOne(
+      { _id: participant._id },
+      { $unset: { cert_sequence: '' }, $set: { cert_released: false } }
+    );
 
     console.log(`[cert] Certificate revoked for ${participant.participant_name}: freed number #${oldSeq}`);
     res.json({
@@ -292,11 +293,49 @@ router.get('/modules', (req, res) => {
 });
 
 // -- GET /counters -------------------------------------------------------------
+// Returns one entry per training type with:
+//   high_water : highest number ever issued (never decreases)
+//   active     : current highest cert_sequence held by a live participant
+//                (decreases when certs are revoked or participants deleted)
 router.get('/counters', async (req, res) => {
   try {
     if (!isAdmin(req)) return res.status(403).json({ error: 'Admin access required.' });
-    const counters = await CertCounter.find({}).sort({ training_type: 1 }).lean();
-    res.json(counters);
+
+    const TYPES = ['FDI', 'FDA', 'FDR', 'FTL', 'NDG', 'HF', 'GD', 'TCD'];
+
+    // Fetch counter docs and compute live active max in parallel
+    const [counterDocs, liveMaxes] = await Promise.all([
+      CertCounter.find({}).lean(),
+      // One aggregation to get the max cert_sequence per type across all live participants
+      Participant.aggregate([
+        { $match: { cert_sequence: { $exists: true, $gt: 0 } } },
+        { $group: { _id: '$training_type', activeMax: { $max: '$cert_sequence' }, activeCount: { $sum: 1 } } },
+      ]),
+    ]);
+
+    // Build a lookup map from the aggregation results
+    const liveMap = {};
+    liveMaxes.forEach(({ _id, activeMax, activeCount }) => {
+      liveMap[_id] = { activeMax, activeCount };
+    });
+
+    // Merge counter docs with live data
+    const result = TYPES.map(type => {
+      const counter = counterDocs.find(c => c.training_type === type) || {};
+      const live    = liveMap[type] || { activeMax: 0, activeCount: 0 };
+      return {
+        training_type: type,
+        high_water:    counter.high_water   ?? 0,
+        floor:         counter.floor        ?? 0,
+        // active = highest cert_sequence currently held by a live participant
+        // This is what the Reset Modal should display — it goes down on revoke/delete
+        active:        live.activeMax,
+        activeCount:   live.activeCount,
+        _id:           counter._id,
+      };
+    });
+
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

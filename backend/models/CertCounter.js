@@ -16,24 +16,20 @@ const certCounterSchema = new mongoose.Schema(
 
 const CertCounter = mongoose.model('CertCounter', certCounterSchema);
 
-// Maps every accepted training_type value to the canonical counter bucket.
-// All aliases for the same certificate family share ONE counter so sequence
-// numbers never collide across aliases.
+// Each training_type maps to its OWN independent counter.
+// No two types share a counter — resetting one never affects another.
 const TO_CODE = {
-  // Dispatch Graduate family
   'Dispatch Graduate': 'FDI',
   FDI: 'FDI',
-  FDA: 'FDI',
-  GD:  'FDI',
-  TCD: 'FDI',
-  // Human Factors family
+  FDA: 'FDA',
+  GD:  'GD',
+  TCD: 'TCD',
   'Human Factors': 'HF',
   HF:  'HF',
-  NDG: 'HF',
-  // Recurrent family
+  NDG: 'NDG',
   'Recurrent': 'FDR',
   FDR: 'FDR',
-  FTL: 'FDR',
+  FTL: 'FTL',
 };
 
 /**
@@ -77,14 +73,11 @@ async function reserveCertSequence(training_type) {
 
   for (let scanAttempt = 1; scanAttempt <= MAX_SCAN_RETRIES; scanAttempt++) {
 
-    // -- Step 1: fetch all aliases for this code ------------------------------
-    const aliasTypes = Object.keys(TO_CODE).filter(k => TO_CODE[k] === code);
-    const queryTypes = [...new Set([code, ...aliasTypes])];
-
-    // -- Step 2: fetch all in-use sequence numbers across ALL aliases ---------
+    // -- Step 1: fetch all in-use sequence numbers for THIS type only ---------
+    // Each type is now fully independent — no cross-type alias sharing.
     const inUseDocs = await Participant.find(
       {
-        training_type: { $in: queryTypes },
+        training_type: code,
         cert_sequence: { $exists: true, $ne: null },
       },
       { cert_sequence: 1 },
@@ -154,4 +147,43 @@ async function reserveCertSequence(training_type) {
   );
 }
 
-module.exports = { CertCounter, reserveCertSequence, TO_CODE };
+/**
+ * syncHighWater — call once at server startup.
+ *
+ * Scans every participant's cert_sequence and advances any CertCounter
+ * whose high_water is behind the actual maximum in the DB.
+ * This is a self-healing guard: if a counter ever drifts out of sync
+ * (e.g. after running fix-null-cert-sequences or a manual DB edit),
+ * the server will silently correct it on next boot.
+ *
+ * Safe to call multiple times: never decreases high_water,
+ * never touches participant records.
+ */
+async function syncHighWater() {
+  const Participant = require('./Participant');
+  const types = Object.values(TO_CODE).filter((v, i, a) => a.indexOf(v) === i); // unique codes
+
+  for (const code of types) {
+    const highest = await Participant.findOne(
+      { training_type: code, cert_sequence: { $exists: true, $gt: 0 } },
+      { cert_sequence: 1 },
+      { sort: { cert_sequence: -1 } }
+    ).lean();
+
+    const maxSeq = highest?.cert_sequence ?? 0;
+    if (maxSeq === 0) continue; // no certs issued yet — nothing to sync
+
+    const counter = await CertCounter.findOne({ training_type: code }).lean();
+    if (counter && counter.high_water >= maxSeq) continue; // already correct
+
+    // Counter is behind — advance it
+    await CertCounter.findOneAndUpdate(
+      { training_type: code, $or: [{ high_water: { $lt: maxSeq } }, { high_water: { $exists: false } }] },
+      { $set: { high_water: maxSeq }, $setOnInsert: { training_type: code, floor: 0 } },
+      { upsert: true, new: true }
+    );
+    console.log(`[cert] syncHighWater: ${code} high_water synced to ${maxSeq}`);
+  }
+}
+
+module.exports = { CertCounter, reserveCertSequence, syncHighWater, TO_CODE };
