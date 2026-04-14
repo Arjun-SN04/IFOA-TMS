@@ -21,6 +21,7 @@ const examResultSchema = new mongoose.Schema(
     // ── Batch / course info ───────────────────────────────────────────────────
     batch_name: { type: String, required: true },         // e.g. 'NOV-DEC 2024'
     course_name: { type: String, required: true },        // e.g. 'Flight Dispatch Initial Training / Promotion'
+    result_header_text: { type: String, default: '' },    // full line shown below "EXAM RESULTS" in PDF
     course_type: {
       type: String,
       required: true,

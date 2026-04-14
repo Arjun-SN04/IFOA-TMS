@@ -42,24 +42,21 @@ api.interceptors.response.use(
 );
 
 // ── Admin Auth ──────────────────────────────────────────────────────────────
-export const signup      = (data) => api.post('/auth/signup', data);
-export const login       = (data) => api.post('/auth/login', data);
-export const getMe       = ()     => api.get('/auth/me');
+export const signup        = (data) => api.post('/auth/signup', data);
+export const login         = (data) => api.post('/auth/login', data);
+export const getMe         = ()     => api.get('/auth/me');
 export const updateProfile = (data) => api.put('/auth/profile', data);
 
 // ── Notifications ──────────────────────────────────────────────
 export const getNotifications = () => api.get('/notifications');
 
 // ── Certificates ────────────────────────────────────────────────────────────
-// Admin: generate (assigns cert_sequence) + preview
 export const generateCertificateBlob = (id, params = {}) =>
   api.get(`/certificates/generate/${id}`, { params, responseType: 'blob' });
 export const generateCertificatePost = (id, body = {}) =>
   api.post(`/certificates/generate/${id}`, body, { responseType: 'blob' });
-// Admin: revoke certificate (freeing the cert number for reuse)
 export const revokeCertificateById = (id) =>
   api.delete(`/certificates/revoke/${id}`);
-// Airline: download already-issued certificate (read-only, no cert_sequence assignment)
 export const downloadIssuedCertificate = (id) =>
   api.get(`/certificates/download/${id}`, { responseType: 'blob' });
 
@@ -78,45 +75,51 @@ export const uploadAirlineLogo = (file) => {
 
 // ── Participants ────────────────────────────────────────────────────────────
 export const getParticipantsByAirline = () => api.get('/participants/by-airline');
-export const getAirlinesList         = () => api.get('/participants/airlines');
-export const getParticipants    = (params) => api.get('/participants', { params });
-export const getParticipant     = (id)     => api.get(`/participants/${id}`);
-export const createParticipant       = (data)   => api.post('/participants', data);
-export const bulkCreateParticipants  = (rows)   => api.post('/participants/bulk', rows);
-export const updateParticipant  = (id, data) => api.put(`/participants/${id}`, data);
-export const deleteParticipant      = (id)          => api.delete(`/participants/${id}`);
-export const deleteAirlineData      = (airlineName) => api.delete(`/participants/airline/${encodeURIComponent(airlineName)}`);
-export const deleteAirlineById      = (airlineId)   => api.delete(`/participants/airline-by-id/${airlineId}`);
-export const updateCertSequence     = (id, cert_sequence) => api.patch(`/participants/${id}/cert-sequence`, { cert_sequence });
-export const updateFullCertId       = (id, cert_sequence, cert_year) => api.patch(`/participants/${id}/full-cert-id`, { cert_sequence, cert_year });
-export const updateNdgScore         = (id, ndg_score) => api.patch(`/participants/${id}/ndg-score`, { ndg_score });
-export const revokeCertificate      = (id)            => api.patch(`/participants/${id}/revoke-cert`);
-export const updateValidity         = (id, cert_validity) => api.patch(`/participants/${id}/validity`, { cert_validity });
+export const getAirlinesList          = () => api.get('/participants/airlines');
+export const getParticipants          = (params) => api.get('/participants', { params });
+export const getParticipant           = (id)     => api.get(`/participants/${id}`);
+export const createParticipant        = (data)   => api.post('/participants', data);
+export const bulkCreateParticipants   = (rows)   => api.post('/participants/bulk', rows);
+export const updateParticipant        = (id, data) => api.put(`/participants/${id}`, data);
+export const deleteParticipant        = (id)       => api.delete(`/participants/${id}`);
+export const deleteAirlineData        = (airlineName) => api.delete(`/participants/airline/${encodeURIComponent(airlineName)}`);
+export const deleteAirlineById        = (airlineId)   => api.delete(`/participants/airline-by-id/${airlineId}`);
+export const updateCertSequence       = (id, cert_sequence) => api.patch(`/participants/${id}/cert-sequence`, { cert_sequence });
+export const updateFullCertId         = (id, cert_sequence, cert_year) => api.patch(`/participants/${id}/full-cert-id`, { cert_sequence, cert_year });
+export const updateNdgScore           = (id, ndg_score) => api.patch(`/participants/${id}/ndg-score`, { ndg_score });
+export const revokeCertificate        = (id)            => api.patch(`/participants/${id}/revoke-cert`);
+export const updateValidity           = (id, cert_validity) => api.patch(`/participants/${id}/validity`, { cert_validity });
 export const sendSubmissionConfirmation = (data) => api.post('/participants/send-confirmation', data);
-export const getCertCounters        = () => api.get('/certificates/counters');
-export const resetCertCounter       = (training_type, startFrom = 0) => api.post('/certificates/counters/reset', { training_type, startFrom, mode: 'hard' });
-export const resetAllCertCounters   = (startFrom = 0) => api.post('/certificates/counters/reset', { all: true, startFrom, mode: 'hard' });
+export const getCertCounters          = () => api.get('/certificates/counters');
+export const resetCertCounter         = (training_type, startFrom = 0) => api.post('/certificates/counters/reset', { training_type, startFrom, mode: 'hard' });
+export const resetAllCertCounters     = (startFrom = 0) => api.post('/certificates/counters/reset', { all: true, startFrom, mode: 'hard' });
 
-// ── Certificates (remaining helpers) ─────────────────────────────────────────────────────
+// ── Certificates (remaining helpers) ─────────────────────────────────────────
 export const getModulesList                 = ()                          => api.get('/certificates/modules');
 export const generateCertificateUrl         = (id)                        => `${API_BASE}/certificates/generate/${id}`;
 export const previewCertificateUrl          = (id)                        => `${API_BASE}/certificates/preview/${id}`;
 export const generateCertificateWithModules = (id, modules, variant = 'default') =>
   api.post(`/certificates/generate/${id}`, { modules, templateVariant: variant }, { responseType: 'blob' });
 
-// ── Password Reset ────────────────────────────────────────────────────────────────────────────
-export const forgotPassword = (email)                          => api.post('/auth/airline/forgot-password', { email });
-export const resetPassword  = (email, token, newPassword)      => api.post('/auth/airline/reset-password', { email, token, newPassword });
+// ── Password Reset ────────────────────────────────────────────────────────────
+export const forgotPassword = (email)                     => api.post('/auth/airline/forgot-password', { email });
+export const resetPassword  = (email, token, newPassword) => api.post('/auth/airline/reset-password', { email, token, newPassword });
 
 // ── Exam Results ─────────────────────────────────────────────────────────────
-export const getExamResults        = (params)               => api.get('/exam-results', { params });
-export const getExamBatches        = ()                     => api.get('/exam-results/batches');
-export const getExamResult         = (id)                   => api.get(`/exam-results/${id}`);
-export const createExamResult      = (data)                 => api.post('/exam-results', data);
-export const bulkCreateExamResults = (rows)                 => api.post('/exam-results/bulk', rows);
-export const updateExamResult      = (id, data)             => api.put(`/exam-results/${id}`, data);
-export const issueResultSheet      = (id, date)             => api.patch(`/exam-results/${id}/issue-sheet`, { sheet_date: date });
-export const deleteExamResult      = (id)                   => api.delete(`/exam-results/${id}`);
+export const getExamResults        = (params) => api.get('/exam-results', { params });
+export const getExamBatches        = ()       => api.get('/exam-results/batches');
+export const getExamResult         = (id)     => api.get(`/exam-results/${id}`);
+export const createExamResult      = (data)   => api.post('/exam-results', data);
+export const bulkCreateExamResults = (rows)   => api.post('/exam-results/bulk', rows);
+export const updateExamResult      = (id, data) => api.put(`/exam-results/${id}`, data);
+export const deleteExamResult      = (id)       => api.delete(`/exam-results/${id}`);
+
+export const issueResultSheet = (id, date) =>
+  api.patch(`/exam-results/${id}/issue-sheet`, { sheet_date: date });
+
+// Download exam result PDF — only succeeds if sheet_issued === true
+export const getExamResultPdf = (id) =>
+  api.get(`/exam-results/${id}/pdf`, { responseType: 'blob' });
 
 // Excel import helpers
 export const parseExamResultsExcel = (file) => {
@@ -130,6 +133,7 @@ export const importExamResultsExcel = (file, meta) => {
   if (meta.batch_name)  fd.append('batch_name',  meta.batch_name);
   if (meta.course_type) fd.append('course_type', meta.course_type);
   if (meta.company)     fd.append('company',     meta.company);
+  if (meta.result_header_text) fd.append('result_header_text', meta.result_header_text);
   return api.post('/exam-results/import-excel', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 

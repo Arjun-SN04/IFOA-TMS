@@ -4,6 +4,7 @@ const multer  = require('multer');
 const XLSX    = require('xlsx');
 const ExamResult = require('../models/ExamResult');
 const { authMiddleware } = require('./auth');
+const { generateExamResultPdf } = require('../services/examResultPdf');
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -35,39 +36,147 @@ function gradeFromMark(m) {
   return 'FAILED';
 }
 
+/**
+ * Returns true if the cell value should be treated as N/A (no marks).
+ * Handles: null, empty string, "NA", "N/A", "n/a", "na", "-", "--"
+ */
+function isNA(val) {
+  if (val == null || val === '') return true;
+  const s = val.toString().trim().toUpperCase().replace(/[\s\-]/g, '');
+  return s === 'NA' || s === 'N/A' || s === '';
+}
+
+function extractResultHeaderTextFromRaw(raw, fallback = '') {
+  if (!Array.isArray(raw) || raw.length === 0) return fallback;
+
+  const banned = [
+    'INTERNATIONAL FLIGHT OPERATIONS ACADEMY',
+    'OBERDORF',
+    'TEL',
+    'EMAIL',
+    'WWW.',
+    'STUDENT',
+    'DATE',
+    'SUBJECTS',
+    'SCORE',
+    'GRADE',
+    'TOTAL MARKS',
+  ];
+
+  const rowText = (r) => (Array.isArray(raw[r]) ? raw[r] : [])
+    .map(v => (v == null ? '' : String(v).trim()))
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // 1) Prefer line below an explicit "EXAM RESULTS" row (best match to PDF position)
+  for (let r = 0; r < raw.length; r++) {
+    const cur = rowText(r).toUpperCase();
+    if (!cur) continue;
+    if (cur.includes('EXAM RESULTS')) {
+      for (let rr = r + 1; rr <= Math.min(raw.length - 1, r + 8); rr++) {
+        const candidate = rowText(rr);
+        const candUpper = candidate.toUpperCase();
+        if (!candidate || candidate.length < 20) continue;
+        if (banned.some(k => candUpper.includes(k))) continue;
+        return candidate;
+      }
+    }
+  }
+
+  // 2) Fallback: first long line in top section that looks like a course/date headline
+  for (let r = 0; r < Math.min(raw.length, 20); r++) {
+    const candidate = rowText(r);
+    const candUpper = candidate.toUpperCase();
+    if (!candidate || candidate.length < 25) continue;
+    if (banned.some(k => candUpper.includes(k))) continue;
+    if (candUpper.includes('COURSE') || candUpper.includes('PROMOTION') || candUpper.includes('/')) {
+      return candidate;
+    }
+  }
+
+  return fallback;
+}
+
+function normalizeName(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractStudentNameFromRaw(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return '';
+
+  // Common template: label "STUDENT" in one cell and name in the next cell.
+  for (let r = 0; r < Math.min(raw.length, 20); r++) {
+    const row = Array.isArray(raw[r]) ? raw[r] : [];
+    for (let c = 0; c < row.length; c++) {
+      const cell = String(row[c] == null ? '' : row[c]).trim();
+      const upper = cell.toUpperCase();
+
+      if (upper === 'STUDENT' || upper === 'STUDENT NAME' || upper === 'NAME') {
+        const next = String(row[c + 1] == null ? '' : row[c + 1]).trim();
+        if (next && !/^(STUDENT|NAME|DATE)$/i.test(next)) return next;
+      }
+
+      const inline = cell.match(/^\s*STUDENT\s*:?\s*(.+)$/i) || cell.match(/^\s*NAME\s*:?\s*(.+)$/i);
+      if (inline && inline[1] && inline[1].trim()) return inline[1].trim();
+    }
+  }
+
+  return '';
+}
+
+function findHeaderForStudent(firstName, lastName, headerByStudentName, fallback = '') {
+  const full = normalizeName(`${firstName || ''} ${lastName || ''}`);
+  if (!full) return fallback;
+
+  if (headerByStudentName.has(full)) return headerByStudentName.get(full) || fallback;
+
+  const first = normalizeName(firstName);
+  const last = normalizeName(lastName);
+  if (!first || !last) return fallback;
+
+  for (const [candidate, header] of headerByStudentName.entries()) {
+    if (!candidate) continue;
+    const hasForward = candidate.includes(`${first} ${last}`);
+    const hasReverse = candidate.includes(`${last} ${first}`);
+    const hasBothTokens = candidate.split(' ').includes(first) && candidate.split(' ').includes(last);
+    if (hasForward || hasReverse || hasBothTokens) return header || fallback;
+  }
+
+  return fallback;
+}
+
 // ── Helper: parse an IFOA exam-results workbook ───────────────────────────────
-// Returns { batchMeta, students[] } or throws with a descriptive message.
 function parseIfoaWorkbook(buffer) {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
 
-  // ── 1. Find the summary sheet (first sheet) ───────────────────────────────
   const summaryName = wb.SheetNames[0];
   const summaryWs   = wb.Sheets[summaryName];
   const summaryRaw  = XLSX.utils.sheet_to_json(summaryWs, { header: 1, defval: null });
 
-  // The IFOA workbook's used range may start at row 2 (no row 1 data). XLSX.sheet_to_json
-  // always starts at the sheet's first *used* row, so summaryRaw[0] = that first row.
-  // We compute rowOffset so we can reference cells by their actual Excel row number.
   const sheetRef   = summaryWs['!ref'] || 'A1';
   const sheetRange = XLSX.utils.decode_range(sheetRef);
-  const rowOffset  = sheetRange.s.r; // 0 if sheet starts at row 1, 1 if it starts at row 2, etc.
+  const rowOffset  = sheetRange.s.r;
 
-  // Helper: read by Excel row (1-based) and 0-based column index
   const cellVal = (excelRow, col) =>
     (summaryRaw[excelRow - 1 - rowOffset]?.[col] || '').toString().trim();
 
-  // Course title: D2 (col index 3, Excel row 2)
   const courseTitle = cellVal(2, 3);
   if (!courseTitle) throw new Error('Could not find course title in the summary sheet (expected cell D2).');
 
-  // Training mode: D4 (col 3, row 4)  |  date range: H4 (col 7, row 4)
+  let resultHeaderText = extractResultHeaderTextFromRaw(summaryRaw, courseTitle);
+
   const trainingModeRaw = cellVal(4, 3).toUpperCase() || 'HYBRID';
   const trainingMode    = trainingModeRaw.includes('ONLINE')    ? 'ONLINE'
                         : trainingModeRaw.includes('IN-PERSON') ? 'IN-PERSON'
                         : 'HYBRID';
 
-  const dateRangeRaw  = cellVal(4, 7);
-  // e.g. "04 November 2024 - 06 December 2024"
+  const dateRangeRaw = cellVal(4, 7);
   let startDate = '', endDate = '';
   const dateMatch = dateRangeRaw.match(/^(.+?)\s*-\s*(.+)$/);
   if (dateMatch) {
@@ -79,13 +188,9 @@ function parseIfoaWorkbook(buffer) {
     endDate   = parseDate(dateMatch[2]);
   }
 
-  // Instructors: O4 = lead (col 14, row 4), O5/O6/O7 = additional
   const leadInstructor = cellVal(4, 14);
-  const instructors    = [cellVal(5, 14), cellVal(6, 14), cellVal(7, 14)]
-    .filter(Boolean);
+  const instructors    = [cellVal(5, 14), cellVal(6, 14), cellVal(7, 14)].filter(Boolean);
 
-  // ── 2. Find header row in summary sheet ──────────────────────────────────
-  // Header row: First Name | Surname | subject abbrs … | FINAL EXAM | Final Marks
   let headerRowIdx = -1;
   let headerRow    = [];
   for (let r = 0; r < summaryRaw.length; r++) {
@@ -98,8 +203,7 @@ function parseIfoaWorkbook(buffer) {
   }
   if (headerRowIdx === -1) throw new Error('Could not locate the student header row in the summary sheet.');
 
-  // Columns after "Surname" are subject abbreviations, then FINAL EXAM, Final Marks
-  const subjectCols = []; // { abbr, colIdx }
+  const subjectCols = [];
   let finalExamCol  = -1;
   let finalMarksCol = -1;
   for (let c = 2; c < headerRow.length; c++) {
@@ -110,13 +214,24 @@ function parseIfoaWorkbook(buffer) {
     subjectCols.push({ abbr: h, colIdx: c });
   }
 
-  // ── 3. Build subject name map from individual Student sheets ─────────────
-  // We'll look up abbr → full name from any student sheet available
   const abbrToName = {};
+  const headerByStudentName = new Map();
   for (let si = 1; si < wb.SheetNames.length; si++) {
     const ws  = wb.Sheets[wb.SheetNames[si]];
     const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-    // Subject rows: col 0 = full name, col 5 = abbr (rows ~19–30)
+
+    const studentHeaderText = extractResultHeaderTextFromRaw(raw, resultHeaderText || courseTitle);
+    const studentNameRaw = extractStudentNameFromRaw(raw) || wb.SheetNames[si] || '';
+    const normalizedStudentName = normalizeName(studentNameRaw);
+    if (normalizedStudentName && studentHeaderText) {
+      headerByStudentName.set(normalizedStudentName, studentHeaderText);
+    }
+
+    // If the summary sheet didn't contain the full PDF subtitle, pick it from the first student sheet.
+    if (!resultHeaderText || resultHeaderText === courseTitle) {
+      resultHeaderText = extractResultHeaderTextFromRaw(raw, resultHeaderText || courseTitle);
+    }
+
     for (let r = 15; r < raw.length; r++) {
       const abbr = (raw[r]?.[5] || '').toString().trim();
       const name = (raw[r]?.[0] || '').toString().trim();
@@ -124,82 +239,82 @@ function parseIfoaWorkbook(buffer) {
         abbrToName[abbr] = name;
       }
     }
-    break; // one student sheet is enough
   }
 
-  // ── 4. Parse each student row from summary ────────────────────────────────
+  // Subject name fallback map (abbreviation → full name) for the 12 standard subjects
+  const DEFAULT_ABBR_NAMES = {
+    LAW: 'Air Law',
+    SYS: 'Aircraft General Knowledge & Systems',
+    MON: 'Flight Monitoring',
+    'M&B': 'Mass & Balance',
+    ATM: 'Air Traffic Management',
+    COM: 'Communication',
+    NAV: 'Navigation',
+    POF: 'Principles of Flight & Performance',
+    PER: 'Principles of Flight & Performance',
+    DGR: 'Dangerous Goods',
+    DRM: 'Dangerous Goods',
+    MET: 'Meteorology',
+    FPL: 'Flight Planning',
+    HPL: 'Human Factors',
+    HF:  'Human Factors',
+  };
+
   const students = [];
   for (let r = headerRowIdx + 1; r < summaryRaw.length; r++) {
     const row = summaryRaw[r];
     if (!row) continue;
     const firstName = (row[0] || '').toString().trim();
     const lastName  = (row[1] || '').toString().trim();
-    if (!firstName && !lastName) continue; // blank row
+    if (!firstName && !lastName) continue;
     if (!firstName || !lastName) continue;
 
+    // Parse subject scores — blank or "NA"/"N/A" cells become null (N/A on PDF)
     const subjects = subjectCols
       .map(({ abbr, colIdx }) => {
-        const marks = row[colIdx];
-        const mo    = (marks != null && marks !== '') ? Number(marks) : null;
-        return {
-          abbr,
-          name:          abbrToName[abbr] || abbr,
-          max_marks:     100,
-          marks_obtained: mo,
-          grade:         gradeFromMark(mo),
-        };
+        const rawVal = row[colIdx];
+        const mo     = isNA(rawVal) ? null : Number(rawVal);
+        const name   = abbrToName[abbr] || DEFAULT_ABBR_NAMES[abbr] || abbr;
+        return { abbr, name, max_marks: 100, marks_obtained: mo, grade: gradeFromMark(mo) };
       })
-      .filter(s => s.abbr); // skip empty
+      .filter(s => s.abbr);
 
-    const finalExamScore = finalExamCol  !== -1 && row[finalExamCol]  != null ? Number(row[finalExamCol])  : null;
-    const finalMarks     = finalMarksCol !== -1 && row[finalMarksCol] != null ? Number(row[finalMarksCol]) : null;
+    // Sort: subjects with real marks first, N/A subjects last
+    const withMarks    = subjects.filter(s => s.marks_obtained != null);
+    const withoutMarks = subjects.filter(s => s.marks_obtained == null);
+    const sortedSubjects = [...withMarks, ...withoutMarks];
+
+    const finalExamScore = finalExamCol  !== -1 && !isNA(row[finalExamCol])  ? Number(row[finalExamCol])  : null;
+    const finalMarks     = finalMarksCol !== -1 && !isNA(row[finalMarksCol]) ? Number(row[finalMarksCol]) : null;
+    const studentHeaderText = findHeaderForStudent(firstName, lastName, headerByStudentName, resultHeaderText || courseTitle);
 
     students.push({
-      first_name:       firstName,
-      last_name:        lastName,
-      batch_name:       '', // caller fills this in
-      course_name:      courseTitle,
-      course_type:      'FDI', // default; caller may override
-      training_mode:    trainingMode,
-      start_date:       startDate,
-      end_date:         endDate,
-      lead_instructor:  leadInstructor,
-      instructors,
-      subjects,
+      first_name: firstName, last_name: lastName,
+      batch_name: '', course_name: courseTitle, course_type: 'FDI',
+      result_header_text: studentHeaderText,
+      training_mode: trainingMode, start_date: startDate, end_date: endDate,
+      lead_instructor: leadInstructor, instructors, subjects: sortedSubjects,
       final_exam_score: finalExamScore,
-      final_marks:      finalMarks != null ? Math.round(finalMarks * 1000) / 1000 : null,
-      sheet_date:       endDate,
-      sheet_issued:     false,
+      final_marks: finalMarks != null ? Math.round(finalMarks * 1000) / 1000 : null,
+      sheet_date: endDate, sheet_issued: false,
     });
   }
 
   if (students.length === 0) throw new Error('No student rows found in the summary sheet.');
-
-  return {
-    batchMeta: { courseTitle, trainingMode, startDate, endDate, leadInstructor, instructors },
-    students,
-  };
+  return { batchMeta: { courseTitle, resultHeaderText, trainingMode, startDate, endDate, leadInstructor, instructors }, students };
 }
 
 // ── GET all exam results ──────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    if (req.admin.role === 'airline') {
-      return res.status(403).json({ error: 'Admin access required.' });
-    }
+    if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
     const { batch_name, course_type, search } = req.query;
     const filter = {};
     if (batch_name)  filter.batch_name  = batch_name;
     if (course_type) filter.course_type = course_type;
     if (search) {
       const re = new RegExp(search, 'i');
-      filter.$or = [
-        { participant_name: re },
-        { first_name: re },
-        { last_name: re },
-        { company: re },
-        { batch_name: re },
-      ];
+      filter.$or = [{ participant_name: re }, { first_name: re }, { last_name: re }, { company: re }, { batch_name: re }];
     }
     const results = await ExamResult.find(filter).sort({ created_at: -1 });
     res.json(results);
@@ -209,21 +324,17 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ── GET batch summary list (distinct batches with counts) ─────────────────────
+// ── GET batch summary list ────────────────────────────────────────────────────
 router.get('/batches', async (req, res) => {
   try {
     if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
     const batches = await ExamResult.aggregate([
-      {
-        $group: {
+      { $group: {
           _id: { batch_name: '$batch_name', course_type: '$course_type', course_name: '$course_name' },
-          count:        { $sum: 1 },
-          avg_mark:     { $avg: '$final_marks' },
-          start_date:   { $first: '$start_date' },
-          end_date:     { $first: '$end_date' },
-        }
-      },
-      { $sort: { '_id.batch_name': -1 } }
+          count: { $sum: 1 }, avg_mark: { $avg: '$final_marks' },
+          start_date: { $first: '$start_date' }, end_date: { $first: '$end_date' },
+      }},
+      { $sort: { '_id.batch_name': -1 } },
     ]);
     res.json(batches);
   } catch (err) {
@@ -236,7 +347,6 @@ router.post('/parse-excel', upload.single('file'), async (req, res) => {
   try {
     if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
-
     const { batchMeta, students } = parseIfoaWorkbook(req.file.buffer);
     res.json({ batchMeta, students });
   } catch (err) {
@@ -252,25 +362,23 @@ router.post('/import-excel', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
 
     const { students } = parseIfoaWorkbook(req.file.buffer);
-
-    // Caller can pass overrides as form fields
     const batchName  = (req.body.batch_name  || '').trim();
     const courseType = (req.body.course_type || 'FDI').trim();
     const company    = (req.body.company     || '').trim();
+    const resultHeaderText = (req.body.result_header_text || '').trim();
 
     if (!batchName) return res.status(400).json({ error: 'batch_name is required.' });
 
-    const saved   = [];
-    const failed  = [];
-
+    const saved = [], failed = [];
     for (const s of students) {
       try {
         const doc = new ExamResult({
           ...s,
-          batch_name:  batchName,
+          batch_name: batchName,
           course_type: courseType,
           company,
-          created_by:  req.admin.id,
+          result_header_text: resultHeaderText || s.result_header_text || s.course_name || '',
+          created_by: req.admin.id,
         });
         await doc.save();
         saved.push({ participant_name: doc.participant_name, id: doc._id });
@@ -279,13 +387,7 @@ router.post('/import-excel', upload.single('file'), async (req, res) => {
       }
     }
 
-    res.status(207).json({
-      message:      `Imported ${saved.length} of ${students.length} records.`,
-      successCount: saved.length,
-      failCount:    failed.length,
-      saved,
-      failed,
-    });
+    res.status(207).json({ message: `Imported ${saved.length} of ${students.length} records.`, successCount: saved.length, failCount: failed.length, saved, failed });
   } catch (err) {
     console.error('POST /exam-results/import-excel error:', err.message);
     res.status(422).json({ error: err.message });
@@ -304,45 +406,67 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// ── GET result sheet PDF (only if sheet has been issued by admin) ─────────────
+router.get('/:id/pdf', async (req, res) => {
+  try {
+    if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
+
+    const doc = await ExamResult.findById(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Exam result not found.' });
+
+    if (!doc.sheet_issued) {
+      return res.status(403).json({
+        error: 'Result sheet has not been issued yet. Please issue the sheet first before downloading the PDF.',
+      });
+    }
+
+    const pdfBuffer = await generateExamResultPdf(doc.toObject());
+
+    const safeName = `${doc.first_name}_${doc.last_name}`.replace(/[^a-zA-Z0-9_]/g, '_');
+    res.set({
+      'Content-Type':        'application/pdf',
+      'Content-Disposition': `inline; filename="IFOA_ExamResult_${safeName}.pdf"`,
+      'Content-Length':      pdfBuffer.length,
+    });
+    res.send(pdfBuffer);
+  } catch (err) {
+    console.error('GET /exam-results/:id/pdf error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST create exam result ───────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
     if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
 
-    const {
-      first_name, last_name, batch_name, course_name, course_type,
-      training_mode, start_date, end_date, company,
-      lead_instructor, instructors,
-      subjects, final_exam_score, final_marks, sheet_date, sheet_issued,
-    } = req.body;
+    const { first_name, last_name, batch_name, course_name, course_type,
+          result_header_text, training_mode, start_date, end_date, company, lead_instructor,
+            instructors, subjects, final_exam_score, final_marks, sheet_date, sheet_issued } = req.body;
 
     const missing = [];
-    if (!first_name)   missing.push('first_name');
-    if (!last_name)    missing.push('last_name');
-    if (!batch_name)   missing.push('batch_name');
-    if (!course_name)  missing.push('course_name');
-    if (!course_type)  missing.push('course_type');
-    if (!start_date)   missing.push('start_date');
-    if (!end_date)     missing.push('end_date');
-    if (missing.length) {
-      return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
-    }
+    if (!first_name)  missing.push('first_name');
+    if (!last_name)   missing.push('last_name');
+    if (!batch_name)  missing.push('batch_name');
+    if (!course_name) missing.push('course_name');
+    if (!course_type) missing.push('course_type');
+    if (!start_date)  missing.push('start_date');
+    if (!end_date)    missing.push('end_date');
+    if (missing.length) return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
 
     const doc = new ExamResult({
-      first_name: first_name.trim(),
-      last_name:  last_name.trim(),
+      first_name: first_name.trim(), last_name: last_name.trim(),
       batch_name, course_name, course_type,
+      result_header_text: result_header_text || course_name,
       training_mode: training_mode || 'HYBRID',
       start_date, end_date,
-      company:          company          || '',
-      lead_instructor:  lead_instructor  || '',
-      instructors:      instructors      || [],
-      subjects:         subjects         || [],
+      company: company || '', lead_instructor: lead_instructor || '',
+      instructors: instructors || [], subjects: subjects || [],
       final_exam_score: final_exam_score != null ? Number(final_exam_score) : null,
       final_marks:      final_marks      != null ? Number(final_marks)      : null,
-      sheet_date:       sheet_date       || end_date,
-      sheet_issued:     sheet_issued     || false,
-      created_by:       req.admin.id,
+      sheet_date: sheet_date || end_date,
+      sheet_issued: sheet_issued || false,
+      created_by: req.admin.id,
     });
 
     await doc.save();
@@ -358,9 +482,7 @@ router.post('/bulk', async (req, res) => {
   try {
     if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
     const rows = req.body;
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return res.status(400).json({ error: 'Expected a non-empty array.' });
-    }
+    if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'Expected a non-empty array.' });
     const results = [];
     for (const row of rows) {
       try {
@@ -384,13 +506,10 @@ router.put('/:id', async (req, res) => {
     if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
     const doc = await ExamResult.findById(req.params.id);
     if (!doc) return res.status(404).json({ error: 'Exam result not found.' });
-
-    const fields = [
-      'first_name','last_name','batch_name','course_name','course_type',
-      'training_mode','start_date','end_date','company',
-      'lead_instructor','instructors','subjects',
-      'final_exam_score','final_marks','sheet_date','sheet_issued',
-    ];
+    const fields = ['first_name','last_name','batch_name','course_name','course_type',
+                    'result_header_text',
+                    'training_mode','start_date','end_date','company','lead_instructor',
+                    'instructors','subjects','final_exam_score','final_marks','sheet_date','sheet_issued'];
     fields.forEach(f => { if (req.body[f] !== undefined) doc[f] = req.body[f]; });
     await doc.save();
     res.json(doc);

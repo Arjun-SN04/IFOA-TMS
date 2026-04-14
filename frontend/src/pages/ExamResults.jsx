@@ -17,6 +17,8 @@ import {
   HiOutlineAcademicCap,
   HiOutlineUpload,
   HiOutlineExclamationCircle,
+  HiOutlineDocumentDownload,
+  HiOutlineLockClosed,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 import {
@@ -28,6 +30,7 @@ import {
   getExamBatches,
   parseExamResultsExcel,
   importExamResultsExcel,
+  getExamResultPdf,
 } from '../api';
 import { useAuth } from '../context/AuthContext';
 
@@ -43,18 +46,20 @@ const COURSE_TYPES = [
   { value: 'TCD', label: 'TCD – Training Competencies Development' },
 ];
 
+// All 12 subjects — Human Factors (HF) is always last; if left empty it shows as N/A
 const DEFAULT_SUBJECTS = [
-  { abbr: 'LAW', name: 'Air Law',                      max_marks: 100, marks_obtained: null },
-  { abbr: 'SYS', name: 'Aircraft Systems',              max_marks: 100, marks_obtained: null },
-  { abbr: 'MON', name: 'Flight Monitoring',             max_marks: 100, marks_obtained: null },
-  { abbr: 'M&B', name: 'Mass & Balance',                max_marks: 100, marks_obtained: null },
-  { abbr: 'ATM', name: 'Air Traffic Management',        max_marks: 100, marks_obtained: null },
-  { abbr: 'COM', name: 'Communication',                 max_marks: 100, marks_obtained: null },
-  { abbr: 'NAV', name: 'Navigation',                    max_marks: 100, marks_obtained: null },
-  { abbr: 'POF', name: 'Principles of Flight & Performance', max_marks: 100, marks_obtained: null },
-  { abbr: 'DGR', name: 'Dangerous Goods',               max_marks: 100, marks_obtained: null },
-  { abbr: 'MET', name: 'Meteorology',                   max_marks: 100, marks_obtained: null },
-  { abbr: 'FPL', name: 'Flight Planning',               max_marks: 100, marks_obtained: null },
+  { abbr: 'LAW', name: 'Air Law',                               max_marks: 100, marks_obtained: null },
+  { abbr: 'SYS', name: 'Aircraft General Knowledge & Systems',  max_marks: 100, marks_obtained: null },
+  { abbr: 'MON', name: 'Flight Monitoring',                     max_marks: 100, marks_obtained: null },
+  { abbr: 'M&B', name: 'Mass & Balance',                        max_marks: 100, marks_obtained: null },
+  { abbr: 'ATM', name: 'Air Traffic Management',                max_marks: 100, marks_obtained: null },
+  { abbr: 'COM', name: 'Communication',                         max_marks: 100, marks_obtained: null },
+  { abbr: 'NAV', name: 'Navigation',                            max_marks: 100, marks_obtained: null },
+  { abbr: 'PER', name: 'Principles of Flight & Performance',    max_marks: 100, marks_obtained: null },
+  { abbr: 'DRM', name: 'Dangerous Goods',                       max_marks: 100, marks_obtained: null },
+  { abbr: 'MET', name: 'Meteorology',                           max_marks: 100, marks_obtained: null },
+  { abbr: 'FPL', name: 'Flight Planning',                       max_marks: 100, marks_obtained: null },
+  { abbr: 'HF',  name: 'Human Factors',                         max_marks: 100, marks_obtained: null }, // always last; null = N/A
 ];
 
 const TABS = ['Overview', 'Student Results', 'Subject Analysis', 'Result Sheets'];
@@ -87,9 +92,36 @@ function courseTypeBadge(type) {
   return 'bg-blue-100 text-blue-700';
 }
 
+/**
+ * Merge stored subjects with DEFAULT_SUBJECTS so all 12 always appear.
+ * N/A subjects (null marks) are pushed to the end.
+ */
+function mergeSubjects(stored) {
+  if (!stored || stored.length === 0) return DEFAULT_SUBJECTS.map(s => ({ ...s }));
+
+  const byAbbr = {};
+  stored.forEach(s => { byAbbr[s.abbr] = s; });
+
+  const merged = DEFAULT_SUBJECTS.map(def => ({
+    ...def,
+    ...(byAbbr[def.abbr] || {}),
+  }));
+
+  // Subjects present in stored but not in DEFAULT_SUBJECTS (e.g. from old data)
+  stored.forEach(s => {
+    if (!merged.find(m => m.abbr === s.abbr)) merged.push(s);
+  });
+
+  // N/A (null marks) subjects go last
+  const withMarks    = merged.filter(s => s.marks_obtained != null);
+  const withoutMarks = merged.filter(s => s.marks_obtained == null);
+  return [...withMarks, ...withoutMarks];
+}
+
 function emptyForm() {
   return {
     first_name: '', last_name: '', batch_name: '', course_name: '',
+    result_header_text: '',
     course_type: 'FDI', training_mode: 'HYBRID',
     start_date: '', end_date: '', company: '',
     lead_instructor: '', instructors: '',
@@ -98,35 +130,56 @@ function emptyForm() {
   };
 }
 
+// ── PDF download helper ───────────────────────────────────────────────────────
+async function downloadPdf(id, name) {
+  try {
+    const res = await getExamResultPdf(id);
+    const url  = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    const link = document.createElement('a');
+    link.href     = url;
+    link.download = `IFOA_ExamResult_${name.replace(/\s+/g, '_')}.pdf`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success('PDF downloaded.');
+  } catch (err) {
+    const msg = err?.response?.data?.error || err.message || 'Failed to download PDF.';
+    toast.error(msg);
+  }
+}
+
+// Open PDF in a new browser tab instead of downloading
+async function viewPdf(id) {
+  try {
+    const res = await getExamResultPdf(id);
+    const url  = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) {
+    const msg = err?.response?.data?.error || err.message || 'Failed to open PDF.';
+    toast.error(msg);
+  }
+}
+
 // ── Import Excel Modal ────────────────────────────────────────────────────────
 function ImportExcelModal({ onClose, onImported }) {
   const fileRef  = useRef(null);
-
-  // step: 'upload' | 'preview' | 'importing' | 'done'
-  const [step, setStep]           = useState('upload');
-  const [file, setFile]           = useState(null);
-  const [dragOver, setDragOver]   = useState(false);
-  const [parsing, setParsing]     = useState(false);
+  const [step, setStep]             = useState('upload');
+  const [file, setFile]             = useState(null);
+  const [dragOver, setDragOver]     = useState(false);
+  const [parsing, setParsing]       = useState(false);
   const [parseError, setParseError] = useState('');
-
-  // Parsed preview data
-  const [batchMeta, setBatchMeta] = useState(null);
-  const [students, setStudents]   = useState([]);
-
-  // Import overrides
+  const [batchMeta, setBatchMeta]   = useState(null);
+  const [students, setStudents]     = useState([]);
   const [batchName,  setBatchName]  = useState('');
   const [courseType, setCourseType] = useState('FDI');
   const [company,    setCompany]    = useState('');
-
-  // Import result
+  const [resultHeaderText, setResultHeaderText] = useState('');
+  const [parsedResultHeaderText, setParsedResultHeaderText] = useState('');
   const [importResult, setImportResult] = useState(null);
 
   const handleFile = (f) => {
     if (!f) return;
-    if (!f.name.match(/\.xlsx?$/i)) {
-      toast.error('Please select an Excel file (.xlsx or .xls)');
-      return;
-    }
+    if (!f.name.match(/\.xlsx?$/i)) { toast.error('Please select an Excel file (.xlsx or .xls)'); return; }
     setFile(f);
     setParseError('');
   };
@@ -134,8 +187,7 @@ function ImportExcelModal({ onClose, onImported }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragOver(false);
-    const f = e.dataTransfer.files[0];
-    handleFile(f);
+    handleFile(e.dataTransfer.files[0]);
   };
 
   const handleParse = async () => {
@@ -146,61 +198,57 @@ function ImportExcelModal({ onClose, onImported }) {
       const res = await parseExamResultsExcel(file);
       const { batchMeta: meta, students: rows } = res.data;
       setBatchMeta(meta);
-      setStudents(rows);
-      // Pre-fill batch name from course title if possible
+      const parsedHeader = meta.resultHeaderText || meta.courseTitle || '';
+      setResultHeaderText(parsedHeader);
+      setParsedResultHeaderText(parsedHeader);
+      // Ensure every student has all 12 subjects (N/A last)
+      setStudents(rows.map(s => ({ ...s, subjects: mergeSubjects(s.subjects) })));
       const titleUpper = (meta.courseTitle || '').toUpperCase();
       const batchGuess = titleUpper.match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z\-\/\s]*\d{4}\b/);
       setBatchName(batchGuess ? batchGuess[0].replace(/\s+/g, '-') : '');
       setStep('preview');
     } catch (err) {
-      const msg = err?.response?.data?.error || err.message || 'Failed to parse Excel file.';
-      setParseError(msg);
+      setParseError(err?.response?.data?.error || err.message || 'Failed to parse Excel file.');
     } finally {
       setParsing(false);
     }
   };
 
   const handleImport = async () => {
-    if (!batchName.trim()) {
-      toast.error('Please enter a Batch Name before importing.');
-      return;
-    }
+    if (!batchName.trim()) { toast.error('Please enter a Batch Name before importing.'); return; }
     setStep('importing');
     try {
-      const res = await importExamResultsExcel(file, {
-        batch_name:  batchName.trim(),
+      const payload = {
+        batch_name: batchName.trim(),
         course_type: courseType,
-        company:     company.trim(),
-      });
+        company: company.trim(),
+      };
+
+      const currentHeader = resultHeaderText.trim();
+      const parsedHeader  = parsedResultHeaderText.trim();
+      if (currentHeader && currentHeader !== parsedHeader) {
+        payload.result_header_text = currentHeader;
+      }
+
+      const res = await importExamResultsExcel(file, payload);
       setImportResult(res.data);
       setStep('done');
       onImported();
     } catch (err) {
-      const msg = err?.response?.data?.error || err.message || 'Import failed.';
-      toast.error(msg);
+      toast.error(err?.response?.data?.error || err.message || 'Import failed.');
       setStep('preview');
     }
   };
 
   const reset = () => {
-    setStep('upload');
-    setFile(null);
-    setBatchMeta(null);
-    setStudents([]);
-    setBatchName('');
-    setParseError('');
-    setImportResult(null);
+    setStep('upload'); setFile(null); setBatchMeta(null); setStudents([]);
+    setBatchName(''); setResultHeaderText(''); setParsedResultHeaderText(''); setParseError(''); setImportResult(null);
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[92vh] flex flex-col"
-      >
-        {/* Header */}
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[92vh] flex flex-col">
         <div className="flex items-center justify-between p-6 border-b border-gray-100 flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-emerald-100 flex items-center justify-center">
@@ -216,29 +264,21 @@ function ImportExcelModal({ onClose, onImported }) {
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400">
-            <HiOutlineX className="w-5 h-5" />
-          </button>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400"><HiOutlineX className="w-5 h-5" /></button>
         </div>
 
-        {/* Step indicators */}
         <div className="flex items-center gap-0 px-6 pt-4 pb-2 flex-shrink-0">
           {['Upload', 'Preview', 'Import'].map((label, i) => {
             const stepIdx = { upload: 0, preview: 1, importing: 2, done: 2 }[step];
-            const done    = i < stepIdx;
-            const active  = i === stepIdx;
+            const done = i < stepIdx, active = i === stepIdx;
             return (
               <div key={label} className="flex items-center">
                 <div className="flex items-center gap-2">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors
-                    ${done   ? 'bg-emerald-500 text-white'
-                    : active ? 'bg-[#0000ff] text-white'
-                    :          'bg-gray-100 text-gray-400'}`}>
+                    ${done ? 'bg-emerald-500 text-white' : active ? 'bg-[#0000ff] text-white' : 'bg-gray-100 text-gray-400'}`}>
                     {done ? '✓' : i + 1}
                   </div>
-                  <span className={`text-xs font-medium ${active ? 'text-gray-900' : 'text-gray-400'}`}>
-                    {label}
-                  </span>
+                  <span className={`text-xs font-medium ${active ? 'text-gray-900' : 'text-gray-400'}`}>{label}</span>
                 </div>
                 {i < 2 && <div className="w-8 h-px bg-gray-200 mx-3" />}
               </div>
@@ -246,54 +286,36 @@ function ImportExcelModal({ onClose, onImported }) {
           })}
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto p-6">
-
-          {/* ── STEP: Upload ── */}
           {step === 'upload' && (
             <div className="space-y-5">
-              {/* Drop zone */}
-              <div
-                className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-colors
-                  ${dragOver ? 'border-[#0000ff] bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'}`}
+              <div className={`border-2 border-dashed rounded-2xl p-10 text-center cursor-pointer transition-colors
+                ${dragOver ? 'border-[#0000ff] bg-blue-50' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
                 onDrop={handleDrop}
-                onClick={() => fileRef.current?.click()}
-              >
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  className="hidden"
-                  onChange={e => handleFile(e.target.files[0])}
-                />
+                onClick={() => fileRef.current?.click()}>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={e => handleFile(e.target.files[0])} />
                 <div className="w-14 h-14 bg-emerald-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <HiOutlineUpload className="w-7 h-7 text-emerald-500" />
                 </div>
                 {file ? (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">{file.name}</p>
-                    <p className="text-xs text-gray-400 mt-1">{(file.size / 1024).toFixed(1)} KB · Click to change</p>
-                  </div>
+                  <div><p className="text-sm font-semibold text-gray-900">{file.name}</p>
+                    <p className="text-xs text-gray-400 mt-1">{(file.size / 1024).toFixed(1)} KB · Click to change</p></div>
                 ) : (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700">Drop your Excel file here</p>
-                    <p className="text-xs text-gray-400 mt-1">or click to browse · .xlsx / .xls · max 10 MB</p>
-                  </div>
+                  <div><p className="text-sm font-semibold text-gray-700">Drop your Excel file here</p>
+                    <p className="text-xs text-gray-400 mt-1">or click to browse · .xlsx / .xls · max 10 MB</p></div>
                 )}
               </div>
-
-              {/* Format hint */}
               <div className="bg-blue-50 rounded-xl p-4">
                 <p className="text-xs font-semibold text-blue-700 mb-2">Expected workbook format</p>
                 <ul className="text-xs text-blue-600 space-y-1 list-disc list-inside">
-                  <li><strong>Sheet 1</strong> — Summary sheet with course metadata (title, date range, instructors) and a student score table</li>
-                  <li><strong>Sheets 2+</strong> — Individual student result sheets (used to map subject full names)</li>
+                  <li><strong>Sheet 1</strong> — Summary sheet with course metadata and a student score table</li>
+                  <li><strong>Sheets 2+</strong> — Individual student result sheets</li>
                   <li>Matches the standard IFOA Exam Results Report workbook</li>
+                  <li>Leave any subject column blank or enter <strong>NA</strong> to mark it as N/A on the result sheet</li>
                 </ul>
               </div>
-
               {parseError && (
                 <div className="flex items-start gap-3 bg-red-50 border border-red-100 rounded-xl p-4">
                   <HiOutlineExclamationCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
@@ -303,77 +325,46 @@ function ImportExcelModal({ onClose, onImported }) {
             </div>
           )}
 
-          {/* ── STEP: Preview ── */}
           {step === 'preview' && batchMeta && (
             <div className="space-y-5">
-              {/* Detected metadata */}
               <div className="bg-gray-50 rounded-xl p-4 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
-                <div>
-                  <p className="text-gray-400 font-medium mb-0.5">Course Title</p>
-                  <p className="text-gray-800 font-semibold">{batchMeta.courseTitle}</p>
-                </div>
-                <div>
-                  <p className="text-gray-400 font-medium mb-0.5">Training Mode</p>
-                  <p className="text-gray-800 font-semibold">{batchMeta.trainingMode}</p>
-                </div>
-                <div>
-                  <p className="text-gray-400 font-medium mb-0.5">Date Range</p>
-                  <p className="text-gray-800 font-semibold">{batchMeta.startDate} → {batchMeta.endDate}</p>
-                </div>
-                <div>
-                  <p className="text-gray-400 font-medium mb-0.5">Lead Instructor</p>
-                  <p className="text-gray-800 font-semibold">{batchMeta.leadInstructor || '–'}</p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-gray-400 font-medium mb-0.5">Other Instructors</p>
-                  <p className="text-gray-800 font-semibold">{batchMeta.instructors.join(', ') || '–'}</p>
-                </div>
+                <div><p className="text-gray-400 font-medium mb-0.5">Course Title</p><p className="text-gray-800 font-semibold">{batchMeta.courseTitle}</p></div>
+                <div><p className="text-gray-400 font-medium mb-0.5">Training Mode</p><p className="text-gray-800 font-semibold">{batchMeta.trainingMode}</p></div>
+                <div><p className="text-gray-400 font-medium mb-0.5">Date Range</p><p className="text-gray-800 font-semibold">{batchMeta.startDate} → {batchMeta.endDate}</p></div>
+                <div><p className="text-gray-400 font-medium mb-0.5">Lead Instructor</p><p className="text-gray-800 font-semibold">{batchMeta.leadInstructor || '–'}</p></div>
+                <div className="col-span-2"><p className="text-gray-400 font-medium mb-0.5">Other Instructors</p><p className="text-gray-800 font-semibold">{batchMeta.instructors.join(', ') || '–'}</p></div>
               </div>
-
-              {/* Import settings */}
               <div>
                 <p className="text-sm font-semibold text-gray-700 mb-3">Import Settings</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Batch Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="e.g. NOV-DEC 2024"
-                      value={batchName}
-                      onChange={e => setBatchName(e.target.value)}
-                    />
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Batch Name <span className="text-red-500">*</span></label>
+                    <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="e.g. NOV-DEC 2024" value={batchName} onChange={e => setBatchName(e.target.value)} />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Course Type</label>
-                    <select
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={courseType}
-                      onChange={e => setCourseType(e.target.value)}
-                    >
-                      {COURSE_TYPES.map(ct => (
-                        <option key={ct.value} value={ct.value}>{ct.label}</option>
-                      ))}
+                    <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={courseType} onChange={e => setCourseType(e.target.value)}>
+                      {COURSE_TYPES.map(ct => <option key={ct.value} value={ct.value}>{ct.label}</option>)}
                     </select>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Company / Airline</label>
-                    <input
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Optional"
-                      value={company}
-                      onChange={e => setCompany(e.target.value)}
-                    />
+                    <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Optional" value={company} onChange={e => setCompany(e.target.value)} />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label className="block text-xs font-medium text-gray-600 mb-1">PDF Header Text (shown below "EXAM RESULTS")</label>
+                    <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="e.g. 4-Weeks Flight Dispatch Initial Course Promotion NOV-DEC 2024 / 04 November - 06 December 2024"
+                      value={resultHeaderText}
+                      onChange={e => setResultHeaderText(e.target.value)} />
                   </div>
                 </div>
               </div>
-
-              {/* Student preview table */}
               <div>
-                <p className="text-sm font-semibold text-gray-700 mb-3">
-                  Students to Import ({students.length})
-                </p>
+                <p className="text-sm font-semibold text-gray-700 mb-3">Students to Import ({students.length})</p>
                 <div className="overflow-x-auto rounded-xl border border-gray-100">
                   <table className="w-full text-xs">
                     <thead>
@@ -381,9 +372,7 @@ function ImportExcelModal({ onClose, onImported }) {
                         <th className="px-3 py-2.5 font-semibold text-gray-600 uppercase tracking-wide">#</th>
                         <th className="px-3 py-2.5 font-semibold text-gray-600 uppercase tracking-wide">Name</th>
                         {students[0]?.subjects?.map(s => (
-                          <th key={s.abbr} className="px-3 py-2.5 font-semibold text-gray-600 uppercase tracking-wide text-center">
-                            {s.abbr}
-                          </th>
+                          <th key={s.abbr} className="px-3 py-2.5 font-semibold text-gray-600 uppercase tracking-wide text-center">{s.abbr}</th>
                         ))}
                         <th className="px-3 py-2.5 font-semibold text-gray-600 uppercase tracking-wide text-center">Exam</th>
                         <th className="px-3 py-2.5 font-semibold text-gray-600 uppercase tracking-wide text-center">Avg</th>
@@ -396,24 +385,16 @@ function ImportExcelModal({ onClose, onImported }) {
                         return (
                           <tr key={i} className="hover:bg-gray-50">
                             <td className="px-3 py-2 text-gray-400">{i + 1}</td>
-                            <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">
-                              {s.first_name} {s.last_name}
-                            </td>
+                            <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{s.first_name} {s.last_name}</td>
                             {s.subjects?.map(sub => (
                               <td key={sub.abbr} className="px-3 py-2 text-center text-gray-700">
-                                {sub.marks_obtained ?? <span className="text-gray-300">–</span>}
+                                {sub.marks_obtained != null ? sub.marks_obtained : <span className="text-gray-300">N/A</span>}
                               </td>
                             ))}
-                            <td className="px-3 py-2 text-center text-gray-700">
-                              {s.final_exam_score ?? <span className="text-gray-300">–</span>}
-                            </td>
-                            <td className="px-3 py-2 text-center font-semibold text-gray-900">
-                              {s.final_marks != null ? Number(s.final_marks).toFixed(2) : '–'}
-                            </td>
+                            <td className="px-3 py-2 text-center text-gray-700">{s.final_exam_score ?? <span className="text-gray-300">–</span>}</td>
+                            <td className="px-3 py-2 text-center font-semibold text-gray-900">{s.final_marks != null ? Number(s.final_marks).toFixed(2) : '–'}</td>
                             <td className="px-3 py-2 text-center">
-                              <span className={`px-1.5 py-0.5 rounded-full font-semibold ${gradeBadge(grade)}`}>
-                                {grade || '–'}
-                              </span>
+                              <span className={`px-1.5 py-0.5 rounded-full font-semibold ${gradeBadge(grade)}`}>{grade || '–'}</span>
                             </td>
                           </tr>
                         );
@@ -425,24 +406,17 @@ function ImportExcelModal({ onClose, onImported }) {
             </div>
           )}
 
-          {/* ── STEP: Importing ── */}
           {step === 'importing' && (
             <div className="flex flex-col items-center justify-center py-20 gap-4">
               <div className="w-12 h-12 border-4 border-blue-100 border-t-[#0000ff] rounded-full animate-spin" />
-              <p className="text-sm font-medium text-gray-600">
-                Saving {students.length} student record{students.length !== 1 ? 's' : ''} to the database…
-              </p>
+              <p className="text-sm font-medium text-gray-600">Saving {students.length} student record{students.length !== 1 ? 's' : ''} to the database…</p>
             </div>
           )}
 
-          {/* ── STEP: Done ── */}
           {step === 'done' && importResult && (
             <div className="space-y-5">
-              {/* Summary banner */}
-              <div className={`rounded-xl p-5 flex items-center gap-4
-                ${importResult.failCount === 0 ? 'bg-emerald-50' : 'bg-amber-50'}`}>
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0
-                  ${importResult.failCount === 0 ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+              <div className={`rounded-xl p-5 flex items-center gap-4 ${importResult.failCount === 0 ? 'bg-emerald-50' : 'bg-amber-50'}`}>
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${importResult.failCount === 0 ? 'bg-emerald-100' : 'bg-amber-100'}`}>
                   {importResult.failCount === 0
                     ? <HiOutlineCheckCircle className="w-7 h-7 text-emerald-600" />
                     : <HiOutlineExclamationCircle className="w-7 h-7 text-amber-600" />}
@@ -452,29 +426,22 @@ function ImportExcelModal({ onClose, onImported }) {
                     {importResult.successCount} of {importResult.successCount + importResult.failCount} records imported successfully
                   </p>
                   <p className={`text-xs mt-0.5 ${importResult.failCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
-                    {importResult.failCount === 0
-                      ? 'All student exam results have been added to the database.'
-                      : `${importResult.failCount} record(s) failed — see details below.`}
+                    {importResult.failCount === 0 ? 'All student exam results have been added to the database.' : `${importResult.failCount} record(s) failed — see details below.`}
                   </p>
                 </div>
               </div>
-
-              {/* Saved list */}
               {importResult.saved?.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Imported</p>
                   <div className="space-y-1">
                     {importResult.saved.map((s, i) => (
                       <div key={i} className="flex items-center gap-2 text-sm text-gray-700">
-                        <HiOutlineCheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                        {s.participant_name}
+                        <HiOutlineCheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />{s.participant_name}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
-
-              {/* Failed list */}
               {importResult.failed?.length > 0 && (
                 <div>
                   <p className="text-xs font-semibold text-red-500 uppercase tracking-wide mb-2">Failed</p>
@@ -492,47 +459,32 @@ function ImportExcelModal({ onClose, onImported }) {
           )}
         </div>
 
-        {/* Footer buttons */}
         <div className="border-t border-gray-100 p-4 flex justify-between gap-3 flex-shrink-0">
           <div>
             {step === 'preview' && (
-              <button onClick={reset}
-                className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-                ← Back
-              </button>
+              <button onClick={reset} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">← Back</button>
             )}
           </div>
           <div className="flex gap-3">
-            <button onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
+            <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
               {step === 'done' ? 'Close' : 'Cancel'}
             </button>
-
             {step === 'upload' && (
-              <button
-                onClick={handleParse}
-                disabled={!file || parsing}
-                className="px-5 py-2 text-sm font-semibold text-white bg-[#0000ff] rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-              >
+              <button onClick={handleParse} disabled={!file || parsing}
+                className="px-5 py-2 text-sm font-semibold text-white bg-[#0000ff] rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
                 {parsing && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
                 {parsing ? 'Parsing…' : 'Parse File →'}
               </button>
             )}
-
             {step === 'preview' && (
-              <button
-                onClick={handleImport}
-                disabled={!batchName.trim()}
-                className="px-5 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2"
-              >
+              <button onClick={handleImport} disabled={!batchName.trim()}
+                className="px-5 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2">
                 <HiOutlineDownload className="w-4 h-4" />
                 Import {students.length} Record{students.length !== 1 ? 's' : ''}
               </button>
             )}
-
             {step === 'done' && importResult?.failCount > 0 && (
-              <button onClick={reset}
-                className="px-5 py-2 text-sm font-semibold text-white bg-[#0000ff] rounded-lg hover:bg-blue-700">
+              <button onClick={reset} className="px-5 py-2 text-sm font-semibold text-white bg-[#0000ff] rounded-lg hover:bg-blue-700">
                 Import Another File
               </button>
             )}
@@ -550,7 +502,8 @@ function ResultFormModal({ initial, onSave, onClose }) {
     return {
       ...initial,
       instructors: Array.isArray(initial.instructors) ? initial.instructors.join(', ') : '',
-      subjects: initial.subjects?.length ? initial.subjects : DEFAULT_SUBJECTS.map(s => ({ ...s })),
+      // Ensure all 12 subjects present; N/A last
+      subjects: mergeSubjects(initial.subjects),
       final_exam_score: initial.final_exam_score ?? '',
       final_marks: initial.final_marks ?? '',
     };
@@ -561,8 +514,13 @@ function ResultFormModal({ initial, onSave, onClose }) {
 
   const setSubject = (i, v) => {
     const subs = [...form.subjects];
-    subs[i] = { ...subs[i], marks_obtained: v === '' ? null : Number(v) };
-    set('subjects', subs);
+    const isNA = v === '' || v === null || v === undefined;
+    subs[i] = { ...subs[i], marks_obtained: isNA ? null : Number(v) };
+
+    // Re-sort: subjects with marks first, N/A last (but keep HF always last among N/A)
+    const withMarks    = subs.filter(s => s.marks_obtained != null);
+    const withoutMarks = subs.filter(s => s.marks_obtained == null);
+    set('subjects', [...withMarks, ...withoutMarks]);
   };
 
   const handleSave = async () => {
@@ -586,30 +544,17 @@ function ResultFormModal({ initial, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
-      >
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white z-10 flex items-center justify-between p-6 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">
-            {initial ? 'Edit Exam Result' : 'Add Exam Result'}
-          </h2>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400">
-            <HiOutlineX className="w-5 h-5" />
-          </button>
+          <h2 className="text-lg font-semibold text-gray-900">{initial ? 'Edit Exam Result' : 'Add Exam Result'}</h2>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400"><HiOutlineX className="w-5 h-5" /></button>
         </div>
-
         <div className="p-6 space-y-6">
-          {/* Student */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Student Information</h3>
             <div className="grid grid-cols-2 gap-3">
-              {[
-                { label: 'First Name *', key: 'first_name' },
-                { label: 'Last Name *',  key: 'last_name'  },
-              ].map(({ label, key }) => (
+              {[{ label: 'First Name *', key: 'first_name' }, { label: 'Last Name *', key: 'last_name' }].map(({ label, key }) => (
                 <div key={key}>
                   <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
                   <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -623,16 +568,13 @@ function ResultFormModal({ initial, onSave, onClose }) {
               </div>
             </div>
           </div>
-
-          {/* Batch */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Batch & Course</h3>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Batch Name *</label>
                 <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. NOV-DEC 2024"
-                  value={form.batch_name} onChange={e => set('batch_name', e.target.value)} />
+                  placeholder="e.g. NOV-DEC 2024" value={form.batch_name} onChange={e => set('batch_name', e.target.value)} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Course Type *</label>
@@ -646,6 +588,12 @@ function ResultFormModal({ initial, onSave, onClose }) {
                 <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                   placeholder="e.g. Flight Dispatch Initial Training / Promotion"
                   value={form.course_name} onChange={e => set('course_name', e.target.value)} />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-gray-600 mb-1">PDF Header Text (below "EXAM RESULTS")</label>
+                <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="e.g. 4-Weeks Flight Dispatch Initial Course Promotion NOV-DEC 2024 / 04 November - 06 December 2024"
+                  value={form.result_header_text || ''} onChange={e => set('result_header_text', e.target.value)} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Start Date *</label>
@@ -672,33 +620,32 @@ function ResultFormModal({ initial, onSave, onClose }) {
               <div className="col-span-2">
                 <label className="block text-xs font-medium text-gray-600 mb-1">Other Instructors (comma-separated)</label>
                 <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. John Smith, Jane Doe"
-                  value={form.instructors} onChange={e => set('instructors', e.target.value)} />
+                  placeholder="e.g. John Smith, Jane Doe" value={form.instructors} onChange={e => set('instructors', e.target.value)} />
               </div>
             </div>
           </div>
 
-          {/* Subject Scores */}
+          {/* Subject scores — all 12, empty = N/A (shown last in PDF) */}
           <div>
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">Subject Scores</h3>
+            <h3 className="text-sm font-semibold text-gray-700 mb-1">Subject Scores</h3>
+            <p className="text-xs text-gray-400 mb-3">Leave blank to mark as N/A on the result sheet. N/A subjects always appear last.</p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {form.subjects.map((s, i) => (
                 <div key={s.abbr}>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
                     {s.abbr} – {s.name}
+                    {s.marks_obtained == null && (
+                      <span className="ml-1 text-[10px] font-semibold text-amber-500 bg-amber-50 px-1.5 py-0.5 rounded">N/A</span>
+                    )}
                   </label>
                   <input type="number" min="0" max="100"
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="–"
-                    value={s.marks_obtained ?? ''}
-                    onChange={e => setSubject(i, e.target.value)}
-                  />
+                    placeholder="Leave blank = N/A" value={s.marks_obtained ?? ''} onChange={e => setSubject(i, e.target.value)} />
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Final Marks */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Final Marks & Sheet</h3>
             <div className="grid grid-cols-2 gap-3">
@@ -722,21 +669,15 @@ function ResultFormModal({ initial, onSave, onClose }) {
               </div>
               <div className="flex items-end pb-1">
                 <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-                  <input type="checkbox" className="rounded"
-                    checked={form.sheet_issued}
-                    onChange={e => set('sheet_issued', e.target.checked)} />
+                  <input type="checkbox" className="rounded" checked={form.sheet_issued} onChange={e => set('sheet_issued', e.target.checked)} />
                   Sheet Already Issued
                 </label>
               </div>
             </div>
           </div>
         </div>
-
         <div className="sticky bottom-0 bg-white border-t border-gray-100 p-4 flex justify-end gap-3">
-          <button onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">
-            Cancel
-          </button>
+          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">Cancel</button>
           <button onClick={handleSave} disabled={saving}
             className="px-4 py-2 text-sm font-medium text-white bg-[#0000ff] rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2">
             {saving && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
@@ -749,14 +690,20 @@ function ResultFormModal({ initial, onSave, onClose }) {
 }
 
 // ── Student Detail Modal ──────────────────────────────────────────────────────
-function StudentDetailModal({ student, onClose, onIssueSheet }) {
-  const [issuing, setIssuing] = useState(false);
+function StudentDetailModal({ student, onClose, onIssueSheet, onRefresh }) {
+  const [issuing,      setIssuing]      = useState(false);
+  const [downloading,  setDownloading]  = useState(false);
+  const [viewingPdf,   setViewingPdf]   = useState(false);
+
+  const id   = student._id || student.id;
+  const name = student.participant_name || `${student.first_name} ${student.last_name}`;
 
   const handleIssue = async () => {
     setIssuing(true);
     try {
-      await onIssueSheet(student._id || student.id);
-      toast.success('Result sheet marked as issued.');
+      await onIssueSheet(id);
+      toast.success('Result sheet issued successfully.');
+      onRefresh();
       onClose();
     } catch {
       toast.error('Failed to update sheet status.');
@@ -765,33 +712,35 @@ function StudentDetailModal({ student, onClose, onIssueSheet }) {
     }
   };
 
+  const handleView = async () => {
+    setViewingPdf(true);
+    try { await viewPdf(id); }
+    finally { setViewingPdf(false); }
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try { await downloadPdf(id, name); }
+    finally { setDownloading(false); }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
-      >
+      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+        className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="sticky top-0 bg-white z-10 flex items-center justify-between p-6 border-b border-gray-100">
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              {student.participant_name || `${student.first_name} ${student.last_name}`}
-            </h2>
+            <h2 className="text-lg font-semibold text-gray-900">{name}</h2>
             <p className="text-xs text-gray-500 mt-0.5">{student.batch_name} · {student.course_type}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400">
-            <HiOutlineX className="w-5 h-5" />
-          </button>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400"><HiOutlineX className="w-5 h-5" /></button>
         </div>
 
         <div className="p-6 space-y-6">
           {/* Score overview */}
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-gray-50 rounded-xl p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">
-                {student.final_marks != null ? Number(student.final_marks).toFixed(2) : '–'}
-              </p>
+              <p className="text-2xl font-bold text-gray-900">{student.final_marks != null ? Number(student.final_marks).toFixed(2) : '–'}</p>
               <p className="text-xs text-gray-500 mt-1">Final Marks</p>
             </div>
             <div className="bg-gray-50 rounded-xl p-4 text-center">
@@ -811,18 +760,16 @@ function StudentDetailModal({ student, onClose, onIssueSheet }) {
             <div>
               <h3 className="text-sm font-semibold text-gray-700 mb-3">Subject Scores</h3>
               <div className="grid grid-cols-2 gap-2">
-                {student.subjects.map((s) => (
+                {mergeSubjects(student.subjects).map((s) => (
                   <div key={s.abbr} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
                       <p className="text-xs font-semibold text-gray-700">{s.abbr}</p>
                       <p className="text-[10px] text-gray-400">{s.name}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-bold text-gray-900">{s.marks_obtained ?? '–'}</p>
-                      {s.grade && (
-                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${gradeBadge(s.grade)}`}>
-                          {s.grade}
-                        </span>
+                      <p className="text-sm font-bold text-gray-900">{s.marks_obtained ?? <span className="text-gray-400 text-xs">N/A</span>}</p>
+                      {s.grade && s.grade !== 'N/A' && (
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${gradeBadge(s.grade)}`}>{s.grade}</span>
                       )}
                     </div>
                   </div>
@@ -841,32 +788,60 @@ function StudentDetailModal({ student, onClose, onIssueSheet }) {
               ['Lead Instructor', student.lead_instructor || '–'],
               ['Sheet Date',      student.sheet_date || '–'],
             ].map(([label, val]) => (
-              <div key={label}>
-                <span className="text-gray-500">{label}: </span>
-                <span className="font-medium text-gray-800">{val}</span>
-              </div>
+              <div key={label}><span className="text-gray-500">{label}: </span><span className="font-medium text-gray-800">{val}</span></div>
             ))}
           </div>
 
-          {/* Sheet status */}
-          <div className={`rounded-xl p-4 flex items-center gap-3 ${student.sheet_issued ? 'bg-green-50' : 'bg-amber-50'}`}>
-            <HiOutlineDocumentText className={`w-6 h-6 flex-shrink-0 ${student.sheet_issued ? 'text-green-600' : 'text-amber-600'}`} />
-            <div className="flex-1">
-              <p className={`text-sm font-semibold ${student.sheet_issued ? 'text-green-700' : 'text-amber-700'}`}>
-                {student.sheet_issued ? 'Result Sheet Issued' : 'Result Sheet Pending'}
-              </p>
-              <p className="text-xs text-gray-500">
-                {student.sheet_issued
-                  ? `Issued on ${student.sheet_date || 'unknown date'}`
-                  : 'Sheet has not been issued yet'}
-              </p>
+          {/* Result Sheet status card */}
+          <div className={`rounded-xl p-4 ${student.sheet_issued ? 'bg-green-50 border border-green-100' : 'bg-amber-50 border border-amber-100'}`}>
+            <div className="flex items-start gap-3">
+              <HiOutlineDocumentText className={`w-6 h-6 flex-shrink-0 mt-0.5 ${student.sheet_issued ? 'text-green-600' : 'text-amber-600'}`} />
+              <div className="flex-1 min-w-0">
+                <p className={`text-sm font-semibold ${student.sheet_issued ? 'text-green-700' : 'text-amber-700'}`}>
+                  {student.sheet_issued ? 'Result Sheet Issued' : 'Result Sheet Not Yet Issued'}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {student.sheet_issued
+                    ? `Issued on ${student.sheet_date || 'unknown date'} — PDF is now available`
+                    : 'The admin must issue this sheet before the PDF becomes available.'}
+                </p>
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  {!student.sheet_issued && (
+                    <button onClick={handleIssue} disabled={issuing}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors">
+                      {issuing
+                        ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        : <HiOutlineCheckCircle className="w-3.5 h-3.5" />}
+                      {issuing ? 'Issuing…' : 'Issue Sheet'}
+                    </button>
+                  )}
+                  {student.sheet_issued && (
+                    <>
+                      <button onClick={handleView} disabled={viewingPdf}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#0000ff] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                        {viewingPdf
+                          ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          : <HiOutlineEye className="w-3.5 h-3.5" />}
+                        {viewingPdf ? 'Opening…' : 'View PDF'}
+                      </button>
+                      <button onClick={handleDownload} disabled={downloading}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors">
+                        {downloading
+                          ? <div className="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                          : <HiOutlineDocumentDownload className="w-3.5 h-3.5" />}
+                        {downloading ? 'Downloading…' : 'Download PDF'}
+                      </button>
+                    </>
+                  )}
+                  {!student.sheet_issued && (
+                    <p className="flex items-center gap-1 text-xs text-gray-400 ml-1">
+                      <HiOutlineLockClosed className="w-3 h-3" />
+                      PDF locked until issued
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
-            {!student.sheet_issued && (
-              <button onClick={handleIssue} disabled={issuing}
-                className="px-3 py-1.5 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50">
-                {issuing ? 'Updating…' : 'Mark as Issued'}
-              </button>
-            )}
           </div>
         </div>
       </motion.div>
@@ -889,6 +864,45 @@ export default function ExamResults() {
   const [editTarget, setEditTarget]   = useState(null);
   const [viewStudent, setViewStudent] = useState(null);
 
+  // ── Multi-select ──────────────────────────────────────────────────────────
+  const [selected, setSelected]       = useState(new Set());
+  const [bulkIssuing, setBulkIssuing] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  const toggleSelect = (id) =>
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const toggleAll = () =>
+    setSelected(selected.size === results.length ? new Set() : new Set(results.map(r => r._id || r.id)));
+
+  const handleBulkDelete = async () => {
+    if (!window.confirm(`Delete ${selected.size} selected result(s)? This cannot be undone.`)) return;
+    setBulkDeleting(true);
+    let count = 0;
+    for (const id of selected) {
+      try { await deleteExamResult(id); count++; } catch {}
+    }
+    toast.success(`${count} result(s) deleted.`);
+    setSelected(new Set());
+    setBulkDeleting(false);
+    fetchAll();
+  };
+
+  const handleBulkIssue = async () => {
+    const toIssue = results.filter(r => selected.has(r._id || r.id) && !r.sheet_issued);
+    if (!toIssue.length) { toast('All selected sheets are already issued.'); return; }
+    if (!window.confirm(`Issue result sheets for ${toIssue.length} student(s)?`)) return;
+    setBulkIssuing(true);
+    let count = 0;
+    for (const r of toIssue) {
+      try { await issueResultSheet(r._id || r.id); count++; } catch {}
+    }
+    toast.success(`${count} sheet(s) issued successfully.`);
+    setSelected(new Set());
+    setBulkIssuing(false);
+    fetchAll();
+  };
+
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -908,15 +922,11 @@ export default function ExamResults() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // Derived stats
   const passCount  = results.filter(r => r.overall_grade && r.overall_grade !== 'FAILED').length;
   const passRate   = results.length ? Math.round((passCount / results.length) * 100) : 0;
-  const avgMark    = results.length
-    ? Math.round(results.reduce((acc, r) => acc + (r.final_marks ?? 0), 0) / results.length * 10) / 10
-    : 0;
+  const avgMark    = results.length ? Math.round(results.reduce((acc, r) => acc + (r.final_marks ?? 0), 0) / results.length * 10) / 10 : 0;
   const sheetCount = results.filter(r => r.sheet_issued).length;
 
-  // Subject averages across all results
   const subjectAverages = (() => {
     const map = {};
     results.forEach(r => {
@@ -928,10 +938,7 @@ export default function ExamResults() {
         }
       });
     });
-    return Object.values(map).map(v => ({
-      ...v,
-      avg: Math.round((v.total / v.count) * 10) / 10,
-    }));
+    return Object.values(map).map(v => ({ ...v, avg: Math.round((v.total / v.count) * 10) / 10 }));
   })();
 
   const handleSave = async (payload) => {
@@ -971,6 +978,18 @@ export default function ExamResults() {
   const openAdd  = ()     => { setEditTarget(null); setShowForm(true); };
   const openEdit = (item) => { setEditTarget(item); setShowForm(true); };
 
+  const handleQuickIssueAndView = async (r) => {
+    const id = r._id || r.id;
+    try {
+      await issueResultSheet(id);
+      fetchAll();
+      toast.success('Sheet issued.');
+      await viewPdf(id);
+    } catch (err) {
+      toast.error(err?.response?.data?.error || 'Failed to issue sheet.');
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -986,17 +1005,13 @@ export default function ExamResults() {
         </div>
         {isAdmin && (
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowImport(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors"
-            >
-              <HiOutlineUpload className="w-4 h-4" />
-              Import Excel
+            <button onClick={() => setShowImport(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-semibold rounded-xl hover:bg-emerald-700 transition-colors">
+              <HiOutlineUpload className="w-4 h-4" />Import Excel
             </button>
             <button onClick={openAdd}
               className="flex items-center gap-2 px-4 py-2 bg-[#0000ff] text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors">
-              <HiOutlinePlus className="w-4 h-4" />
-              Add Result
+              <HiOutlinePlus className="w-4 h-4" />Add Result
             </button>
           </div>
         )}
@@ -1005,10 +1020,10 @@ export default function ExamResults() {
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
         {[
-          { label: 'Total Students', value: results.length,  Icon: HiOutlineUsers,       color: 'text-blue-600',    bg: 'bg-blue-50'   },
+          { label: 'Total Students', value: results.length,  Icon: HiOutlineUsers,       color: 'text-blue-600',    bg: 'bg-blue-50'    },
           { label: 'Batch Average',  value: `${avgMark}%`,   Icon: HiOutlineChartBar,     color: 'text-emerald-600', bg: 'bg-emerald-50' },
-          { label: 'Pass Rate',      value: `${passRate}%`,  Icon: HiOutlineCheckCircle,  color: 'text-violet-600',  bg: 'bg-violet-50' },
-          { label: 'Sheets Issued',  value: sheetCount,      Icon: HiOutlineDocumentText, color: 'text-amber-600',   bg: 'bg-amber-50'  },
+          { label: 'Pass Rate',      value: `${passRate}%`,  Icon: HiOutlineCheckCircle,  color: 'text-violet-600',  bg: 'bg-violet-50'  },
+          { label: 'Sheets Issued',  value: sheetCount,      Icon: HiOutlineDocumentText, color: 'text-amber-600',   bg: 'bg-amber-50'   },
         ].map(({ label, value, Icon, color, bg }) => (
           <div key={label} className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
             <div className={`w-8 h-8 rounded-lg ${bg} flex items-center justify-center mb-3`}>
@@ -1021,53 +1036,60 @@ export default function ExamResults() {
       </div>
 
       {/* Main card */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-        {/* Tab bar */}
-        <div className="flex border-b border-gray-100 overflow-x-auto">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-visible">
+        <div className="sticky top-0 z-30 bg-white flex border-b border-gray-100 overflow-x-auto">
           {TABS.map((tab, i) => (
             <button key={tab} onClick={() => setActiveTab(i)}
-              className={[
-                'flex-shrink-0 px-5 py-3.5 text-sm font-medium border-b-2 transition-colors',
-                activeTab === i
-                  ? 'border-[#0000ff] text-[#0000ff]'
-                  : 'border-transparent text-gray-500 hover:text-gray-700',
-              ].join(' ')}>
+              className={['flex-shrink-0 px-5 py-3.5 text-sm font-medium border-b-2 transition-colors',
+                activeTab === i ? 'border-[#0000ff] text-[#0000ff]' : 'border-transparent text-gray-500 hover:text-gray-700'].join(' ')}>
               {tab}
             </button>
           ))}
         </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-3 p-4 border-b border-gray-50">
-          <div className="relative flex-1 min-w-[180px]">
+        <div className="sticky top-[53px] z-20 flex flex-wrap items-center gap-2 p-4 border-b border-gray-50 bg-white/95 backdrop-blur-sm">
+          <div className="relative w-full sm:w-64 md:w-72 lg:w-80">
             <HiOutlineSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Search student, batch, company…"
-              value={search} onChange={e => setSearch(e.target.value)}
-            />
+            <input className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Search student, batch, company…" value={search} onChange={e => setSearch(e.target.value)} />
           </div>
-          <select
-            className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          <select className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={filterType} onChange={e => setFilterType(e.target.value)}>
             <option value="">All Course Types</option>
             {COURSE_TYPES.map(ct => <option key={ct.value} value={ct.value}>{ct.value}</option>)}
           </select>
-          <select
-            className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          <select className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={filterBatch} onChange={e => setFilterBatch(e.target.value)}>
             <option value="">All Batches</option>
-            {batches.map(b => (
-              <option key={b._id?.batch_name} value={b._id?.batch_name}>{b._id?.batch_name}</option>
-            ))}
+            {batches.map(b => <option key={b._id?.batch_name} value={b._id?.batch_name}>{b._id?.batch_name}</option>)}
           </select>
-          <button onClick={fetchAll}
-            className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500" title="Refresh">
+          <button onClick={fetchAll} className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500" title="Refresh">
             <HiOutlineRefresh className="w-4 h-4" />
           </button>
+
+          {isAdmin && activeTab === 0 && selected.size > 0 && (
+            <>
+              <span className="ml-auto text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1.5 rounded-lg">
+                {selected.size} selected
+              </span>
+              <button onClick={handleBulkIssue} disabled={bulkIssuing || bulkDeleting || selected.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                {bulkIssuing
+                  ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  : <HiOutlineCheckCircle className="w-3.5 h-3.5" />}
+                {bulkIssuing ? 'Issuing…' : `Issue Certificates${selected.size > 0 ? ` (${selected.size})` : ''}`}
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting || bulkIssuing || selected.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                {bulkDeleting
+                  ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  : <HiOutlineTrash className="w-3.5 h-3.5" />}
+                {bulkDeleting ? 'Deleting…' : `Delete Selected${selected.size > 0 ? ` (${selected.size})` : ''}`}
+              </button>
+            </>
+          )}
         </div>
 
-        {/* Content */}
         <div className="p-4 sm:p-6">
           {loading ? (
             <div className="flex items-center justify-center py-20">
@@ -1089,57 +1111,72 @@ export default function ExamResults() {
                     )}
                   </div>
                 ) : (
-                  <div className="overflow-x-auto rounded-xl border border-gray-100">
+                  <div className="rounded-xl border border-gray-100 overflow-hidden">
+                    <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="bg-gray-50 text-left">
-                          {['#','Student','Batch','Type','Final Marks','Grade','Sheet', isAdmin && 'Actions']
-                            .filter(Boolean).map(h => (
+                        <tr className="bg-gray-50 text-left sticky top-0 z-10">
+                          {isAdmin && (
+                            <th className="px-4 py-3">
+                              <input type="checkbox"
+                                checked={selected.size === results.length && results.length > 0}
+                                onChange={toggleAll}
+                                className="rounded border-gray-300 text-[#0000ff] focus:ring-blue-500 cursor-pointer"
+                                title={selected.size === results.length ? 'Deselect all' : 'Select all'}
+                              />
+                            </th>
+                          )}
+                          {['#','Student','Batch','Type','Final Marks','Grade','Sheet', isAdmin && 'Actions'].filter(Boolean).map(h => (
                             <th key={h} className="px-4 py-3 font-semibold text-gray-600 text-xs uppercase tracking-wide">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
-                        {results.map((r, i) => (
-                          <tr key={r._id || r.id} className="hover:bg-gray-50 transition-colors">
+                        {results.map((r, i) => {
+                          const rid = r._id || r.id;
+                          const isSelected = selected.has(rid);
+                          return (
+                          <tr key={rid} className={`hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''}`}>
+                            {isAdmin && (
+                              <td className="px-4 py-3">
+                                <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(rid)}
+                                  className="rounded border-gray-300 text-[#0000ff] focus:ring-blue-500 cursor-pointer" />
+                              </td>
+                            )}
                             <td className="px-4 py-3 text-gray-400">{i + 1}</td>
                             <td className="px-4 py-3">
-                              <button onClick={() => setViewStudent(r)}
-                                className="font-medium text-gray-900 hover:text-[#0000ff] text-left">
+                              <button onClick={() => setViewStudent(r)} className="font-medium text-gray-900 hover:text-[#0000ff] text-left">
                                 {r.participant_name || `${r.first_name} ${r.last_name}`}
                               </button>
                               {r.company && <p className="text-xs text-gray-400">{r.company}</p>}
                             </td>
                             <td className="px-4 py-3 text-gray-600">{r.batch_name}</td>
                             <td className="px-4 py-3">
-                              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${courseTypeBadge(r.course_type)}`}>
-                                {r.course_type}
-                              </span>
+                              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${courseTypeBadge(r.course_type)}`}>{r.course_type}</span>
                             </td>
-                            <td className="px-4 py-3 font-semibold text-gray-900">
-                              {r.final_marks != null ? Number(r.final_marks).toFixed(2) : '–'}
-                            </td>
+                            <td className="px-4 py-3 font-semibold text-gray-900">{r.final_marks != null ? Number(r.final_marks).toFixed(2) : '–'}</td>
                             <td className="px-4 py-3">
-                              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${gradeBadge(r.overall_grade)}`}>
-                                {r.overall_grade || '–'}
-                              </span>
+                              <span className={`text-xs font-semibold px-2 py-1 rounded-full ${gradeBadge(r.overall_grade)}`}>{r.overall_grade || '–'}</span>
                             </td>
                             <td className="px-4 py-3">
                               {r.sheet_issued
                                 ? <span className="text-xs text-green-600 font-medium flex items-center gap-1"><HiOutlineCheckCircle className="w-3.5 h-3.5" /> Issued</span>
-                                : <span className="text-xs text-amber-600 font-medium">Pending</span>}
+                                : <span className="text-xs text-amber-600 font-medium flex items-center gap-1"><HiOutlineLockClosed className="w-3 h-3" /> Pending</span>}
                             </td>
                             {isAdmin && (
                               <td className="px-4 py-3">
                                 <div className="flex items-center gap-1">
-                                  <button onClick={() => setViewStudent(r)} title="View"
-                                    className="p-1.5 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-[#0000ff]">
+                                  <button onClick={() => setViewStudent(r)} title="View" className="p-1.5 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-[#0000ff]">
                                     <HiOutlineEye className="w-4 h-4" />
                                   </button>
-                                  <button onClick={() => openEdit(r)} title="Edit"
-                                    className="p-1.5 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-[#0000ff]">
+                                  <button onClick={() => openEdit(r)} title="Edit" className="p-1.5 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-[#0000ff]">
                                     <HiOutlinePencil className="w-4 h-4" />
                                   </button>
+                                  {r.sheet_issued && (
+                                    <button onClick={() => viewPdf(rid)} title="View PDF" className="p-1.5 rounded-lg hover:bg-blue-50 text-gray-400 hover:text-[#0000ff]">
+                                      <HiOutlineDocumentText className="w-4 h-4" />
+                                    </button>
+                                  )}
                                   <button onClick={() => handleDelete(r._id || r.id, r.participant_name || `${r.first_name} ${r.last_name}`)} title="Delete"
                                     className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600">
                                     <HiOutlineTrash className="w-4 h-4" />
@@ -1148,9 +1185,11 @@ export default function ExamResults() {
                               </td>
                             )}
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
+                    </div>
                   </div>
                 )
               )}
@@ -1170,19 +1209,22 @@ export default function ExamResults() {
                         onClick={() => setViewStudent(r)}>
                         <div className="flex items-start justify-between mb-3">
                           <div>
-                            <h3 className="font-semibold text-gray-900 text-sm">
-                              {r.participant_name || `${r.first_name} ${r.last_name}`}
-                            </h3>
+                            <h3 className="font-semibold text-gray-900 text-sm">{r.participant_name || `${r.first_name} ${r.last_name}`}</h3>
                             <p className="text-xs text-gray-400">{r.company || r.batch_name}</p>
                           </div>
-                          <span className={`text-xs font-bold px-2 py-1 rounded-full ${gradeBadge(r.overall_grade)}`}>
-                            {r.overall_grade || '–'}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            {r.sheet_issued && (
+                              <span className="flex items-center gap-1 text-[10px] font-semibold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                                <HiOutlineCheckCircle className="w-3 h-3" /> Issued
+                              </span>
+                            )}
+                            <span className={`text-xs font-bold px-2 py-1 rounded-full ${gradeBadge(r.overall_grade)}`}>{r.overall_grade || '–'}</span>
+                          </div>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center">
                           {[
                             { val: r.final_marks != null ? Number(r.final_marks).toFixed(2) : '–', label: 'Avg' },
-                            { val: r.final_exam_score ?? '–',  label: 'Exam'     },
+                            { val: r.final_exam_score ?? '–', label: 'Exam' },
                             { val: r.subjects?.filter(s => s.marks_obtained != null).length ?? 0, label: 'Subjects' },
                           ].map(({ val, label }) => (
                             <div key={label} className="bg-gray-50 rounded-lg p-2">
@@ -1215,17 +1257,14 @@ export default function ExamResults() {
                               <p className="text-base font-bold text-gray-900">{s.abbr}</p>
                               <p className="text-xs text-gray-400">{s.name}</p>
                             </div>
-                            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${gradeBadge(grade)}`}>
-                              {grade || '–'}
-                            </span>
+                            <span className={`text-xs font-semibold px-2 py-1 rounded-full ${gradeBadge(grade)}`}>{grade || '–'}</span>
                           </div>
                           <div className="flex items-end gap-2 mt-2">
                             <p className="text-3xl font-bold text-gray-900">{s.avg}</p>
                             <p className="text-xs text-gray-400 mb-1">/ 100 · {s.count} students</p>
                           </div>
                           <div className="mt-3 w-full bg-gray-100 rounded-full h-1.5">
-                            <div className="h-1.5 rounded-full bg-[#0000ff] transition-all"
-                              style={{ width: `${s.avg}%` }} />
+                            <div className="h-1.5 rounded-full bg-[#0000ff] transition-all" style={{ width: `${s.avg}%` }} />
                           </div>
                         </div>
                       );
@@ -1234,7 +1273,7 @@ export default function ExamResults() {
                 )
               )}
 
-              {/* TAB 3 — Result sheets */}
+              {/* TAB 3 — Result Sheets */}
               {activeTab === 3 && (
                 results.length === 0 ? (
                   <div className="text-center py-16 text-gray-400">
@@ -1252,37 +1291,56 @@ export default function ExamResults() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
-                        {results.map((r, i) => (
-                          <tr key={r._id || r.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 py-3 text-gray-400">{i + 1}</td>
-                            <td className="px-4 py-3 font-medium text-gray-900">
-                              {r.participant_name || `${r.first_name} ${r.last_name}`}
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">{r.batch_name}</td>
-                            <td className="px-4 py-3 text-gray-600">{r.sheet_date || '–'}</td>
-                            <td className="px-4 py-3">
-                              {r.sheet_issued
-                                ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 px-2 py-1 rounded-full">
-                                    <HiOutlineCheckCircle className="w-3.5 h-3.5" /> Issued
-                                  </span>
-                                : <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-1 rounded-full">Pending</span>}
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-3">
-                                <button onClick={() => setViewStudent(r)}
-                                  className="flex items-center gap-1 text-xs font-medium text-[#0000ff] hover:underline">
-                                  <HiOutlineEye className="w-3.5 h-3.5" /> View
-                                </button>
-                                {isAdmin && !r.sheet_issued && (
-                                  <button onClick={() => handleIssueSheet(r._id || r.id)}
-                                    className="flex items-center gap-1 text-xs font-medium text-amber-600 hover:underline">
-                                    <HiOutlineDownload className="w-3.5 h-3.5" /> Issue
+                        {results.map((r, i) => {
+                          const id   = r._id || r.id;
+                          const name = r.participant_name || `${r.first_name} ${r.last_name}`;
+                          return (
+                            <tr key={id} className="hover:bg-gray-50 transition-colors">
+                              <td className="px-4 py-3 text-gray-400">{i + 1}</td>
+                              <td className="px-4 py-3 font-medium text-gray-900">{name}</td>
+                              <td className="px-4 py-3 text-gray-600">{r.batch_name}</td>
+                              <td className="px-4 py-3 text-gray-600">{r.sheet_date || '–'}</td>
+                              <td className="px-4 py-3">
+                                {r.sheet_issued
+                                  ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-green-700 bg-green-100 px-2 py-1 rounded-full">
+                                      <HiOutlineCheckCircle className="w-3.5 h-3.5" /> Issued
+                                    </span>
+                                  : <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-1 rounded-full">
+                                      <HiOutlineLockClosed className="w-3 h-3" /> Pending
+                                    </span>}
+                              </td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-3">
+                                  <button onClick={() => setViewStudent(r)}
+                                    className="flex items-center gap-1 text-xs font-medium text-[#0000ff] hover:underline">
+                                    <HiOutlineEye className="w-3.5 h-3.5" /> View
                                   </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                                  {r.sheet_issued ? (
+                                    <>
+                                      <button onClick={() => viewPdf(id)}
+                                        className="flex items-center gap-1 text-xs font-medium text-[#0000ff] hover:underline">
+                                        <HiOutlineDocumentText className="w-3.5 h-3.5" /> PDF
+                                      </button>
+                                      <button onClick={() => downloadPdf(id, name)}
+                                        className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:underline">
+                                        <HiOutlineDocumentDownload className="w-3.5 h-3.5" /> Download
+                                      </button>
+                                    </>
+                                  ) : isAdmin ? (
+                                    <button onClick={() => handleQuickIssueAndView(r)}
+                                      className="flex items-center gap-1 text-xs font-medium text-amber-600 hover:underline">
+                                      <HiOutlineCheckCircle className="w-3.5 h-3.5" /> Issue & View
+                                    </button>
+                                  ) : (
+                                    <span className="flex items-center gap-1 text-xs text-gray-400">
+                                      <HiOutlineLockClosed className="w-3 h-3" /> PDF locked
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -1296,23 +1354,18 @@ export default function ExamResults() {
       {/* Modals */}
       <AnimatePresence>
         {showImport && (
-          <ImportExcelModal
-            onClose={() => setShowImport(false)}
-            onImported={() => { fetchAll(); }}
-          />
+          <ImportExcelModal onClose={() => setShowImport(false)} onImported={() => { fetchAll(); }} />
         )}
         {showForm && (
-          <ResultFormModal
-            initial={editTarget}
-            onSave={handleSave}
-            onClose={() => { setShowForm(false); setEditTarget(null); }}
-          />
+          <ResultFormModal initial={editTarget} onSave={handleSave}
+            onClose={() => { setShowForm(false); setEditTarget(null); }} />
         )}
         {viewStudent && (
           <StudentDetailModal
             student={viewStudent}
             onClose={() => setViewStudent(null)}
             onIssueSheet={handleIssueSheet}
+            onRefresh={fetchAll}
           />
         )}
       </AnimatePresence>
