@@ -20,6 +20,7 @@ import {
   HiOutlineDocumentDownload,
   HiOutlineLockClosed,
 } from 'react-icons/hi';
+import { Clock, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   getExamResults,
@@ -625,7 +626,7 @@ function ResultFormModal({ initial, onSave, onClose }) {
             </div>
           </div>
 
-          {/* Subject scores — all 12, empty = N/A (shown last in PDF) */}
+          {/* Subject scores — all 12, empty = N/A (shown last in PDF) — N/A badge removed */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-1">Subject Scores</h3>
             <p className="text-xs text-gray-400 mb-3">Leave blank to mark as N/A on the result sheet. N/A subjects always appear last.</p>
@@ -634,9 +635,6 @@ function ResultFormModal({ initial, onSave, onClose }) {
                 <div key={s.abbr}>
                   <label className="block text-xs font-medium text-gray-600 mb-1">
                     {s.abbr} – {s.name}
-                    {s.marks_obtained == null && (
-                      <span className="ml-1 text-[10px] font-semibold text-amber-500 bg-amber-50 px-1.5 py-0.5 rounded">N/A</span>
-                    )}
                   </label>
                   <input type="number" min="0" max="100"
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -690,8 +688,9 @@ function ResultFormModal({ initial, onSave, onClose }) {
 }
 
 // ── Student Detail Modal ──────────────────────────────────────────────────────
-function StudentDetailModal({ student, onClose, onIssueSheet, onRefresh }) {
+function StudentDetailModal({ student, onClose, onIssueSheet, onRevokeSheet, onRefresh }) {
   const [issuing,      setIssuing]      = useState(false);
+  const [revoking,     setRevoking]     = useState(false);
   const [downloading,  setDownloading]  = useState(false);
   const [viewingPdf,   setViewingPdf]   = useState(false);
 
@@ -709,6 +708,21 @@ function StudentDetailModal({ student, onClose, onIssueSheet, onRefresh }) {
       toast.error('Failed to update sheet status.');
     } finally {
       setIssuing(false);
+    }
+  };
+
+  const handleRevoke = async () => {
+    if (!window.confirm('Revoke this result sheet? It will return to Pending status and the student will lose PDF access.')) return;
+    setRevoking(true);
+    try {
+      await onRevokeSheet(id);
+      toast.success('Result sheet revoked — status is now Pending.');
+      onRefresh();
+      onClose();
+    } catch {
+      toast.error('Failed to revoke sheet.');
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -831,6 +845,14 @@ function StudentDetailModal({ student, onClose, onIssueSheet, onRefresh }) {
                           : <HiOutlineDocumentDownload className="w-3.5 h-3.5" />}
                         {downloading ? 'Downloading…' : 'Download PDF'}
                       </button>
+                      {/* ── Revoke Sheet button ── */}
+                      <button onClick={handleRevoke} disabled={revoking}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors">
+                        {revoking
+                          ? <div className="w-3.5 h-3.5 border-2 border-red-300 border-t-red-600 rounded-full animate-spin" />
+                          : <HiOutlineRefresh className="w-3.5 h-3.5" />}
+                        {revoking ? 'Revoking…' : 'Revoke Sheet'}
+                      </button>
                     </>
                   )}
                   {!student.sheet_issued && (
@@ -858,6 +880,7 @@ export default function ExamResults() {
   const [search, setSearch]           = useState('');
   const [filterType, setFilterType]   = useState('');
   const [filterBatch, setFilterBatch] = useState('');
+  const [filterSheet, setFilterSheet] = useState(''); // '' | 'pending' | 'generated'
   const [batches, setBatches]         = useState([]);
   const [showForm, setShowForm]       = useState(false);
   const [showImport, setShowImport]   = useState(false);
@@ -868,6 +891,8 @@ export default function ExamResults() {
   const [selected, setSelected]       = useState(new Set());
   const [bulkIssuing, setBulkIssuing] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkRevoking, setBulkRevoking] = useState(false);
+  const [revokingSheetId, setRevokingSheetId] = useState(null);
 
   const toggleSelect = (id) =>
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -900,6 +925,24 @@ export default function ExamResults() {
     toast.success(`${count} sheet(s) issued successfully.`);
     setSelected(new Set());
     setBulkIssuing(false);
+    fetchAll();
+  };
+
+  const handleBulkRevoke = async () => {
+    const toRevoke = results.filter(r => selected.has(r._id || r.id) && r.sheet_issued);
+    if (!toRevoke.length) { toast('No issued sheets in selected records.'); return; }
+    if (!window.confirm(`Revoke result sheets for ${toRevoke.length} student(s)?`)) return;
+    setBulkRevoking(true);
+    let count = 0;
+    for (const r of toRevoke) {
+      try {
+        await updateExamResult(r._id || r.id, { sheet_issued: false, sheet_date: null });
+        count++;
+      } catch {}
+    }
+    toast.success(`${count} sheet(s) revoked successfully.`);
+    setSelected(new Set());
+    setBulkRevoking(false);
     fetchAll();
   };
 
@@ -975,6 +1018,25 @@ export default function ExamResults() {
     fetchAll();
   };
 
+  // Revoke sheet — revert back to pending by calling updateExamResult with sheet_issued: false
+  const handleRevokeSheet = async (id) => {
+    await updateExamResult(id, { sheet_issued: false, sheet_date: null });
+    fetchAll();
+  };
+
+  const handleRevokeSheetWithConfirm = async (id) => {
+    if (!window.confirm('Revoke this sheet? It will return to Pending.')) return;
+    setRevokingSheetId(id);
+    try {
+      await handleRevokeSheet(id);
+      toast.success('Sheet revoked.');
+    } catch {
+      toast.error('Failed to revoke.');
+    } finally {
+      setRevokingSheetId(null);
+    }
+  };
+
   const openAdd  = ()     => { setEditTarget(null); setShowForm(true); };
   const openEdit = (item) => { setEditTarget(item); setShowForm(true); };
 
@@ -989,6 +1051,13 @@ export default function ExamResults() {
       toast.error(err?.response?.data?.error || 'Failed to issue sheet.');
     }
   };
+
+  // Apply local sheet filter on top of server results
+  const filteredResults = filterSheet === ''
+    ? results
+    : filterSheet === 'pending'
+      ? results.filter(r => !r.sheet_issued)
+      : results.filter(r => r.sheet_issued);
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto">
@@ -1037,7 +1106,8 @@ export default function ExamResults() {
 
       {/* Main card */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-visible">
-        <div className="sticky top-0 z-30 bg-white flex border-b border-gray-100 overflow-x-auto">
+        {/* Tab bar — sticky */}
+        <div className="sticky top-0 z-30 bg-white flex border-b border-gray-100 overflow-x-auto rounded-t-2xl">
           {TABS.map((tab, i) => (
             <button key={tab} onClick={() => setActiveTab(i)}
               className={['flex-shrink-0 px-5 py-3.5 text-sm font-medium border-b-2 transition-colors',
@@ -1047,6 +1117,7 @@ export default function ExamResults() {
           ))}
         </div>
 
+        {/* Filter bar — sticky below tabs */}
         <div className="sticky top-[53px] z-20 flex flex-wrap items-center gap-2 p-4 border-b border-gray-50 bg-white/95 backdrop-blur-sm">
           <div className="relative w-full sm:w-64 md:w-72 lg:w-80">
             <HiOutlineSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1063,23 +1134,52 @@ export default function ExamResults() {
             <option value="">All Batches</option>
             {batches.map(b => <option key={b._id?.batch_name} value={b._id?.batch_name}>{b._id?.batch_name}</option>)}
           </select>
+
+          {/* ── Sheet status filter with Lucide icons ── */}
+          <div className="flex items-center gap-1.5 ml-auto">
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Show:</span>
+            <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+              <button onClick={() => setFilterSheet('')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filterSheet === '' ? 'bg-[#0000ff] text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                All
+              </button>
+              <button onClick={() => setFilterSheet('pending')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filterSheet === 'pending' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                <Clock className="w-3.5 h-3.5" />
+                Pending
+              </button>
+              <button onClick={() => setFilterSheet('generated')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filterSheet === 'generated' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                Generated
+              </button>
+            </div>
+          </div>
+
           <button onClick={fetchAll} className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-500" title="Refresh">
             <HiOutlineRefresh className="w-4 h-4" />
           </button>
 
           {isAdmin && activeTab === 0 && selected.size > 0 && (
             <>
-              <span className="ml-auto text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1.5 rounded-lg">
+              <span className="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1.5 rounded-lg">
                 {selected.size} selected
               </span>
-              <button onClick={handleBulkIssue} disabled={bulkIssuing || bulkDeleting || selected.size === 0}
-                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+              <button onClick={handleBulkIssue} disabled={bulkIssuing || bulkDeleting || bulkRevoking || selected.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-[#0000ff] text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                 {bulkIssuing
                   ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   : <HiOutlineCheckCircle className="w-3.5 h-3.5" />}
                 {bulkIssuing ? 'Issuing…' : `Issue Certificates${selected.size > 0 ? ` (${selected.size})` : ''}`}
               </button>
-              <button onClick={handleBulkDelete} disabled={bulkDeleting || bulkIssuing || selected.size === 0}
+              <button onClick={handleBulkRevoke} disabled={bulkRevoking || bulkIssuing || bulkDeleting || selected.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-white border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                {bulkRevoking
+                  ? <div className="w-3.5 h-3.5 border-2 border-red-300 border-t-red-600 rounded-full animate-spin" />
+                  : <HiOutlineRefresh className="w-3.5 h-3.5" />}
+                {bulkRevoking ? 'Revoking…' : `Revoke Selected${selected.size > 0 ? ` (${selected.size})` : ''}`}
+              </button>
+              <button onClick={handleBulkDelete} disabled={bulkDeleting || bulkIssuing || bulkRevoking || selected.size === 0}
                 className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                 {bulkDeleting
                   ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -1099,7 +1199,7 @@ export default function ExamResults() {
             <>
               {/* TAB 0 — Overview table */}
               {activeTab === 0 && (
-                results.length === 0 ? (
+                filteredResults.length === 0 ? (
                   <div className="text-center py-16 text-gray-400">
                     <HiOutlineClipboardList className="w-10 h-10 mx-auto mb-3 opacity-40" />
                     <p className="text-sm">No exam results found.</p>
@@ -1114,25 +1214,25 @@ export default function ExamResults() {
                   <div className="rounded-xl border border-gray-100 overflow-hidden">
                     <div className="overflow-x-auto">
                     <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-gray-50 text-left sticky top-0 z-10">
+                      <thead className="sticky top-0 z-10">
+                        <tr className="bg-gray-50 text-left">
                           {isAdmin && (
-                            <th className="px-4 py-3">
+                            <th className="px-4 py-3 bg-gray-50">
                               <input type="checkbox"
-                                checked={selected.size === results.length && results.length > 0}
+                                checked={selected.size === filteredResults.length && filteredResults.length > 0}
                                 onChange={toggleAll}
                                 className="rounded border-gray-300 text-[#0000ff] focus:ring-blue-500 cursor-pointer"
-                                title={selected.size === results.length ? 'Deselect all' : 'Select all'}
+                                title={selected.size === filteredResults.length ? 'Deselect all' : 'Select all'}
                               />
                             </th>
                           )}
                           {['#','Student','Batch','Type','Final Marks','Grade','Sheet', isAdmin && 'Actions'].filter(Boolean).map(h => (
-                            <th key={h} className="px-4 py-3 font-semibold text-gray-600 text-xs uppercase tracking-wide">{h}</th>
+                            <th key={h} className="px-4 py-3 font-semibold text-gray-600 text-xs uppercase tracking-wide bg-gray-50">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
-                        {results.map((r, i) => {
+                        {filteredResults.map((r, i) => {
                           const rid = r._id || r.id;
                           const isSelected = selected.has(rid);
                           return (
@@ -1177,6 +1277,18 @@ export default function ExamResults() {
                                       <HiOutlineDocumentText className="w-4 h-4" />
                                     </button>
                                   )}
+                                  {r.sheet_issued && (
+                                    <button
+                                      onClick={() => handleRevokeSheetWithConfirm(rid)}
+                                      title="Revoke Sheet"
+                                      disabled={revokingSheetId === rid}
+                                      className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600 disabled:opacity-50"
+                                    >
+                                      {revokingSheetId === rid
+                                        ? <div className="w-4 h-4 border-2 border-red-300 border-t-red-600 rounded-full animate-spin" />
+                                        : <HiOutlineRefresh className="w-4 h-4" />}
+                                    </button>
+                                  )}
                                   <button onClick={() => handleDelete(r._id || r.id, r.participant_name || `${r.first_name} ${r.last_name}`)} title="Delete"
                                     className="p-1.5 rounded-lg hover:bg-red-50 text-gray-400 hover:text-red-600">
                                     <HiOutlineTrash className="w-4 h-4" />
@@ -1196,14 +1308,14 @@ export default function ExamResults() {
 
               {/* TAB 1 — Student cards */}
               {activeTab === 1 && (
-                results.length === 0 ? (
+                filteredResults.length === 0 ? (
                   <div className="text-center py-16 text-gray-400">
                     <HiOutlineAcademicCap className="w-10 h-10 mx-auto mb-3 opacity-40" />
                     <p className="text-sm">No results to display.</p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {results.map(r => (
+                    {filteredResults.map(r => (
                       <div key={r._id || r.id}
                         className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
                         onClick={() => setViewStudent(r)}>
@@ -1275,7 +1387,7 @@ export default function ExamResults() {
 
               {/* TAB 3 — Result Sheets */}
               {activeTab === 3 && (
-                results.length === 0 ? (
+                filteredResults.length === 0 ? (
                   <div className="text-center py-16 text-gray-400">
                     <HiOutlineDocumentText className="w-10 h-10 mx-auto mb-3 opacity-40" />
                     <p className="text-sm">No result sheets available.</p>
@@ -1284,14 +1396,14 @@ export default function ExamResults() {
                   <div className="overflow-x-auto rounded-xl border border-gray-100">
                     <table className="w-full text-sm">
                       <thead>
-                        <tr className="bg-gray-50 text-left">
+                        <tr className="bg-gray-50 text-left sticky top-0 z-10">
                           {['#','Student','Batch','Sheet Date','Status','Actions'].map(h => (
-                            <th key={h} className="px-4 py-3 font-semibold text-gray-600 text-xs uppercase tracking-wide">{h}</th>
+                            <th key={h} className="px-4 py-3 font-semibold text-gray-600 text-xs uppercase tracking-wide bg-gray-50">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
-                        {results.map((r, i) => {
+                        {filteredResults.map((r, i) => {
                           const id   = r._id || r.id;
                           const name = r.participant_name || `${r.first_name} ${r.last_name}`;
                           return (
@@ -1325,6 +1437,17 @@ export default function ExamResults() {
                                         className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:underline">
                                         <HiOutlineDocumentDownload className="w-3.5 h-3.5" /> Download
                                       </button>
+                                      {isAdmin && (
+                                        <button
+                                          onClick={() => handleRevokeSheetWithConfirm(id)}
+                                          disabled={revokingSheetId === id}
+                                          className="flex items-center gap-1 text-xs font-medium text-red-500 hover:underline disabled:opacity-50"
+                                        >
+                                          {revokingSheetId === id
+                                            ? <div className="w-3.5 h-3.5 border-2 border-red-300 border-t-red-600 rounded-full animate-spin" />
+                                            : <HiOutlineRefresh className="w-3.5 h-3.5" />} Revoke
+                                        </button>
+                                      )}
                                     </>
                                   ) : isAdmin ? (
                                     <button onClick={() => handleQuickIssueAndView(r)}
@@ -1365,6 +1488,7 @@ export default function ExamResults() {
             student={viewStudent}
             onClose={() => setViewStudent(null)}
             onIssueSheet={handleIssueSheet}
+            onRevokeSheet={handleRevokeSheet}
             onRefresh={fetchAll}
           />
         )}

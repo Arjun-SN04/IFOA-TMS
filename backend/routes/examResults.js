@@ -130,7 +130,7 @@ function extractStudentNameFromRaw(raw) {
   return '';
 }
 
-function findHeaderForStudent(firstName, lastName, headerByStudentName, fallback = '') {
+function findHeaderForStudent(firstName, lastName, headerByStudentName, fallback = '', studentIndex = -1) {
   const full = normalizeName(`${firstName || ''} ${lastName || ''}`);
   if (!full) return fallback;
 
@@ -139,6 +139,18 @@ function findHeaderForStudent(firstName, lastName, headerByStudentName, fallback
   const first = normalizeName(firstName);
   const last = normalizeName(lastName);
   if (!first || !last) return fallback;
+
+  // Try forward and reverse short keys first (added during sheet parsing)
+  const fwdKey = `${first} ${last}`;
+  const revKey = `${last} ${first}`;
+  if (headerByStudentName.has(fwdKey)) return headerByStudentName.get(fwdKey) || fallback;
+  if (headerByStudentName.has(revKey)) return headerByStudentName.get(revKey) || fallback;
+
+  // Try sheet-name-based key (e.g. "STUDENT 7") using the 1-based index
+  if (studentIndex >= 0) {
+    const sheetKey = normalizeName(`Student ${studentIndex + 1}`);
+    if (headerByStudentName.has(sheetKey)) return headerByStudentName.get(sheetKey) || fallback;
+  }
 
   for (const [candidate, header] of headerByStudentName.entries()) {
     if (!candidate) continue;
@@ -220,16 +232,38 @@ function parseIfoaWorkbook(buffer) {
     const ws  = wb.Sheets[wb.SheetNames[si]];
     const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
-    const studentHeaderText = extractResultHeaderTextFromRaw(raw, resultHeaderText || courseTitle);
-    const studentNameRaw = extractStudentNameFromRaw(raw) || wb.SheetNames[si] || '';
-    const normalizedStudentName = normalizeName(studentNameRaw);
-    if (normalizedStudentName && studentHeaderText) {
-      headerByStudentName.set(normalizedStudentName, studentHeaderText);
+    // Always extract this student sheet's own header text (may differ per student)
+    const studentHeaderText = extractResultHeaderTextFromRaw(raw, courseTitle);
+
+    // Extract student name from the sheet itself (most reliable source)
+    const studentNameRaw = extractStudentNameFromRaw(raw) || '';
+
+    // Also store entries keyed by sheet name as a fallback
+    const sheetKey = normalizeName(wb.SheetNames[si]);
+    if (sheetKey && studentHeaderText) {
+      headerByStudentName.set(sheetKey, studentHeaderText);
+    }
+
+    if (studentNameRaw) {
+      const normalizedStudentName = normalizeName(studentNameRaw);
+      if (normalizedStudentName && studentHeaderText) {
+        headerByStudentName.set(normalizedStudentName, studentHeaderText);
+      }
+      // Also store first-name-only and last-name-only keys for fuzzy matching
+      const parts = normalizedStudentName.split(' ').filter(Boolean);
+      if (parts.length >= 2) {
+        const firstPart = parts[0];
+        const lastPart  = parts[parts.length - 1];
+        const fwdKey = `${firstPart} ${lastPart}`;
+        const revKey = `${lastPart} ${firstPart}`;
+        if (!headerByStudentName.has(fwdKey)) headerByStudentName.set(fwdKey, studentHeaderText);
+        if (!headerByStudentName.has(revKey)) headerByStudentName.set(revKey, studentHeaderText);
+      }
     }
 
     // If the summary sheet didn't contain the full PDF subtitle, pick it from the first student sheet.
     if (!resultHeaderText || resultHeaderText === courseTitle) {
-      resultHeaderText = extractResultHeaderTextFromRaw(raw, resultHeaderText || courseTitle);
+      resultHeaderText = studentHeaderText || resultHeaderText;
     }
 
     for (let r = 15; r < raw.length; r++) {
@@ -286,7 +320,7 @@ function parseIfoaWorkbook(buffer) {
 
     const finalExamScore = finalExamCol  !== -1 && !isNA(row[finalExamCol])  ? Number(row[finalExamCol])  : null;
     const finalMarks     = finalMarksCol !== -1 && !isNA(row[finalMarksCol]) ? Number(row[finalMarksCol]) : null;
-    const studentHeaderText = findHeaderForStudent(firstName, lastName, headerByStudentName, resultHeaderText || courseTitle);
+    const studentHeaderText = findHeaderForStudent(firstName, lastName, headerByStudentName, resultHeaderText || courseTitle, r - headerRowIdx - 1);
 
     students.push({
       first_name: firstName, last_name: lastName,

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Clock, CheckCircle2 } from 'lucide-react';
 import {
   HiOutlineOfficeBuilding,
   HiOutlineUsers,
@@ -374,23 +375,23 @@ function ParticipantCard({ p, checked, onCheck, onPreview, onDownload, onEdit, o
         const saved      = scoreEntry?.saved  || false;
         return (
           <div className="mt-2 ml-8 flex items-center gap-1.5">
-            <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1">
-              <span className="text-[9px] font-bold text-amber-600 uppercase tracking-wide">Score</span>
+            <div className="flex items-center gap-1 bg-blue-50 border border-blue-200 rounded-lg px-2 py-1">
+              <span className="text-[9px] font-bold text-blue-600 uppercase tracking-wide">Score</span>
               <input
                 type="number" min="0" max="100"
                 placeholder="0-100"
                 value={currentVal}
                 onChange={e => setNdgScores(prev => ({ ...prev, [pid]: { value: e.target.value, saving: false, saved: false } }))}
                 onKeyDown={e => { if (e.key === 'Enter') onNdgScoreSave(pid); }}
-                className="w-14 px-1 py-0 text-[11px] bg-transparent border-none outline-none text-amber-800 font-semibold placeholder-amber-300"
+                className="w-14 px-1 py-0 text-[11px] bg-transparent border-none outline-none text-blue-800 font-semibold placeholder-blue-300"
                 disabled={saving}
               />
-              <span className="text-[10px] text-amber-500">%</span>
+              <span className="text-[10px] text-blue-500">%</span>
             </div>
             <button
               onClick={() => onNdgScoreSave(pid)}
               disabled={saving || !currentVal}
-              className="flex items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-semibold bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 transition-colors"
+              className="flex items-center gap-0.5 px-2 py-1 rounded-lg text-[10px] font-semibold bg-[#0000ff] hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
             >
               {saving ? <Spin cls="w-3 h-3 border-2 border-white/40 border-t-white" /> : saved ? '✓ Saved' : 'Save Score'}
             </button>
@@ -1029,7 +1030,7 @@ export default function Airlines() {
           {/* Save All NDG Scores */}
           {Object.values(ndgScores).some(entry => entry && entry.value) && (
             <button onClick={handleSaveAllNdgScores} disabled={savingAllNdgScores}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${!savingAllNdgScores ? 'bg-amber-500 text-white hover:bg-amber-600 shadow-md' : 'bg-amber-300 text-amber-700'}`}>
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${!savingAllNdgScores ? 'bg-[#0000ff] text-white hover:bg-blue-700 shadow-md' : 'bg-blue-200 text-blue-700'}`}>
               {savingAllNdgScores ? <Spin cls="w-3.5 h-3.5 border-2 border-white/40 border-t-white" /> : <HiOutlineCheckCircle className="w-3.5 h-3.5" />}
               {savingAllNdgScores ? 'Saving…' : 'Save All NDG Scores'}
             </button>
@@ -1041,16 +1042,18 @@ export default function Airlines() {
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-primary-500 uppercase tracking-wider whitespace-nowrap">Show:</span>
             <div className="flex items-center gap-1 bg-primary-50 rounded-xl p-1">
-              {[['', 'All'], ['pending', '⏳ Pending'], ['generated', '✅ Generated']].map(([val, label]) => (
-                <button key={val} onClick={() => setFilterCertStatus(val)}
-                  className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
-                  style={filterCertStatus === val
-                    ? { background: '#1d4ed8', color: '#ffffff', boxShadow: '0 1px 3px rgba(29,78,216,0.4)' }
-                    : { color: '#94a3b8' }
-                  }>
-                  {label}
-                </button>
-              ))}
+              <button onClick={() => setFilterCertStatus('')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${filterCertStatus === '' ? 'bg-[#0000ff] text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                All
+              </button>
+              <button onClick={() => setFilterCertStatus('pending')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${filterCertStatus === 'pending' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                <Clock className="w-3.5 h-3.5" /> Pending
+              </button>
+              <button onClick={() => setFilterCertStatus('generated')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${filterCertStatus === 'generated' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                <CheckCircle2 className="w-3.5 h-3.5" /> Generated
+              </button>
             </div>
           </div>
 
@@ -1300,23 +1303,23 @@ export default function Airlines() {
                                     const saved      = scoreEntry?.saved  || false;
                                     return (
                                       <div className="mt-1.5 flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                                        <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg px-1.5 py-1">
-                                          <span className="text-[9px] font-bold text-amber-600 uppercase tracking-wide">Score</span>
+                                        <div className="flex items-center gap-1 bg-blue-50 border border-blue-200 rounded-lg px-1.5 py-1">
+                                          <span className="text-[9px] font-bold text-blue-600 uppercase tracking-wide">Score</span>
                                           <input
                                             type="number" min="0" max="100"
                                             placeholder="0-100"
                                             value={currentVal}
                                             onChange={e => setNdgScores(prev => ({ ...prev, [pid]: { value: e.target.value, saving: false, saved: false } }))}
                                             onKeyDown={e => { if (e.key === 'Enter') handleNdgScoreSave(pid); }}
-                                            className="w-14 px-1 py-0 text-[11px] bg-transparent border-none outline-none text-amber-800 font-semibold placeholder-amber-300"
+                                            className="w-14 px-1 py-0 text-[11px] bg-transparent border-none outline-none text-blue-800 font-semibold placeholder-blue-300"
                                             disabled={saving}
                                           />
-                                          <span className="text-[10px] text-amber-500">%</span>
+                                          <span className="text-[10px] text-blue-500">%</span>
                                         </div>
                                         <button
                                           onClick={() => handleNdgScoreSave(pid)}
                                           disabled={saving || !currentVal}
-                                          className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg text-[10px] font-semibold bg-amber-500 hover:bg-amber-600 text-white disabled:opacity-50 transition-colors"
+                                          className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg text-[10px] font-semibold bg-[#0000ff] hover:bg-blue-700 text-white disabled:opacity-50 transition-colors"
                                         >
                                           {saving ? <Spin cls="w-3 h-3 border-2 border-white/40 border-t-white" /> : saved ? '✓' : 'Save'}
                                         </button>
