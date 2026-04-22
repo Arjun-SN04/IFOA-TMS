@@ -70,7 +70,6 @@ function extractResultHeaderTextFromRaw(raw, fallback = '') {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // 1) Prefer line below an explicit "EXAM RESULTS" row (best match to PDF position)
   for (let r = 0; r < raw.length; r++) {
     const cur = rowText(r).toUpperCase();
     if (!cur) continue;
@@ -85,7 +84,6 @@ function extractResultHeaderTextFromRaw(raw, fallback = '') {
     }
   }
 
-  // 2) Fallback: first long line in top section that looks like a course/date headline
   for (let r = 0; r < Math.min(raw.length, 20); r++) {
     const candidate = rowText(r);
     const candUpper = candidate.toUpperCase();
@@ -110,7 +108,6 @@ function normalizeName(value) {
 function extractStudentNameFromRaw(raw) {
   if (!Array.isArray(raw) || raw.length === 0) return '';
 
-  // Common template: label "STUDENT" in one cell and name in the next cell.
   for (let r = 0; r < Math.min(raw.length, 20); r++) {
     const row = Array.isArray(raw[r]) ? raw[r] : [];
     for (let c = 0; c < row.length; c++) {
@@ -140,13 +137,11 @@ function findHeaderForStudent(firstName, lastName, headerByStudentName, fallback
   const last = normalizeName(lastName);
   if (!first || !last) return fallback;
 
-  // Try forward and reverse short keys first (added during sheet parsing)
   const fwdKey = `${first} ${last}`;
   const revKey = `${last} ${first}`;
   if (headerByStudentName.has(fwdKey)) return headerByStudentName.get(fwdKey) || fallback;
   if (headerByStudentName.has(revKey)) return headerByStudentName.get(revKey) || fallback;
 
-  // Try sheet-name-based key (e.g. "STUDENT 7") using the 1-based index
   if (studentIndex >= 0) {
     const sheetKey = normalizeName(`Student ${studentIndex + 1}`);
     if (headerByStudentName.has(sheetKey)) return headerByStudentName.get(sheetKey) || fallback;
@@ -232,13 +227,9 @@ function parseIfoaWorkbook(buffer) {
     const ws  = wb.Sheets[wb.SheetNames[si]];
     const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
 
-    // Always extract this student sheet's own header text (may differ per student)
     const studentHeaderText = extractResultHeaderTextFromRaw(raw, courseTitle);
-
-    // Extract student name from the sheet itself (most reliable source)
     const studentNameRaw = extractStudentNameFromRaw(raw) || '';
 
-    // Also store entries keyed by sheet name as a fallback
     const sheetKey = normalizeName(wb.SheetNames[si]);
     if (sheetKey && studentHeaderText) {
       headerByStudentName.set(sheetKey, studentHeaderText);
@@ -249,7 +240,6 @@ function parseIfoaWorkbook(buffer) {
       if (normalizedStudentName && studentHeaderText) {
         headerByStudentName.set(normalizedStudentName, studentHeaderText);
       }
-      // Also store first-name-only and last-name-only keys for fuzzy matching
       const parts = normalizedStudentName.split(' ').filter(Boolean);
       if (parts.length >= 2) {
         const firstPart = parts[0];
@@ -261,7 +251,6 @@ function parseIfoaWorkbook(buffer) {
       }
     }
 
-    // If the summary sheet didn't contain the full PDF subtitle, pick it from the first student sheet.
     if (!resultHeaderText || resultHeaderText === courseTitle) {
       resultHeaderText = studentHeaderText || resultHeaderText;
     }
@@ -275,7 +264,6 @@ function parseIfoaWorkbook(buffer) {
     }
   }
 
-  // Subject name fallback map (abbreviation → full name) for the 12 standard subjects
   const DEFAULT_ABBR_NAMES = {
     LAW: 'Air Law',
     SYS: 'Aircraft General Knowledge & Systems',
@@ -303,7 +291,6 @@ function parseIfoaWorkbook(buffer) {
     if (!firstName && !lastName) continue;
     if (!firstName || !lastName) continue;
 
-    // Parse subject scores — blank or "NA"/"N/A" cells become null (N/A on PDF)
     const subjects = subjectCols
       .map(({ abbr, colIdx }) => {
         const rawVal = row[colIdx];
@@ -313,7 +300,6 @@ function parseIfoaWorkbook(buffer) {
       })
       .filter(s => s.abbr);
 
-    // Sort: subjects with real marks first, N/A subjects last
     const withMarks    = subjects.filter(s => s.marks_obtained != null);
     const withoutMarks = subjects.filter(s => s.marks_obtained == null);
     const sortedSubjects = [...withMarks, ...withoutMarks];
@@ -363,12 +349,25 @@ router.get('/batches', async (req, res) => {
   try {
     if (req.admin.role === 'airline') return res.status(403).json({ error: 'Admin access required.' });
     const batches = await ExamResult.aggregate([
-      { $group: {
-          _id: { batch_name: '$batch_name', course_type: '$course_type', course_name: '$course_name' },
-          count: { $sum: 1 }, avg_mark: { $avg: '$final_marks' },
-          start_date: { $first: '$start_date' }, end_date: { $first: '$end_date' },
-      }},
+      {
+        $group: {
+          _id: {
+            // Normalize batch_name to lowercase+trimmed so "batch" and "Batch" collapse to one
+            batch_name: { $toLower: { $trim: { input: '$batch_name' } } },
+          },
+          // Keep the original casing of the first occurrence for display
+          batch_name_display: { $first: { $trim: { input: '$batch_name' } } },
+          count:      { $sum: 1 },
+          avg_mark:   { $avg: '$final_marks' },
+          start_date: { $first: '$start_date' },
+          end_date:   { $first: '$end_date' },
+        },
+      },
       { $sort: { '_id.batch_name': -1 } },
+      {
+        // Re-shape so the frontend still sees _id.batch_name (original casing)
+        $addFields: { '_id.batch_name': '$batch_name_display' },
+      },
     ]);
     res.json(batches);
   } catch (err) {
@@ -490,7 +489,7 @@ router.post('/', async (req, res) => {
 
     const doc = new ExamResult({
       first_name: first_name.trim(), last_name: last_name.trim(),
-      batch_name, course_name, course_type,
+      batch_name: batch_name.trim(), course_name, course_type,
       result_header_text: result_header_text || course_name,
       training_mode: training_mode || 'HYBRID',
       start_date, end_date,

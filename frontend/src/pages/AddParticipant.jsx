@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import DatePicker from '../components/DatePicker';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -204,12 +205,20 @@ function SingleForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="label">Start Date *</label>
-          <input type="date" name="training_date" value={form.training_date} onChange={handleChange} className="input-field" />
+          <DatePicker
+            value={form.training_date}
+            onChange={val => setForm(f => ({ ...f, training_date: val }))}
+            placeholder="mm/dd/yyyy"
+          />
         </div>
         <div>
           <label className="label">End Date</label>
-          <input type="date" name="end_date" value={form.end_date} onChange={handleChange} className="input-field"
-            min={form.training_date || undefined} />
+          <DatePicker
+            value={form.end_date}
+            onChange={val => setForm(f => ({ ...f, end_date: val }))}
+            min={form.training_date || undefined}
+            placeholder="mm/dd/yyyy"
+          />
           <p className="text-[10px] text-primary-400 mt-1">Completion date shown on certificate</p>
         </div>
       </div>
@@ -634,13 +643,20 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="label">Start Date *</label>
-            <input type="date" value={shared.training_date} onChange={e => setSharedField('training_date', e.target.value)}
-              className="input-field" />
+            <DatePicker
+              value={shared.training_date}
+              onChange={val => setSharedField('training_date', val)}
+              placeholder="mm/dd/yyyy"
+            />
           </div>
           <div>
             <label className="label">End Date</label>
-            <input type="date" value={shared.end_date} onChange={e => setSharedField('end_date', e.target.value)}
-              className="input-field" min={shared.training_date || undefined} />
+            <DatePicker
+              value={shared.end_date}
+              onChange={val => setSharedField('end_date', val)}
+              min={shared.training_date || undefined}
+              placeholder="mm/dd/yyyy"
+            />
             <p className="text-[10px] text-primary-400 mt-1">Completion date shown on certificate</p>
           </div>
         </div>

@@ -497,7 +497,7 @@ function ImportExcelModal({ onClose, onImported }) {
 }
 
 // ── Add / Edit Modal ──────────────────────────────────────────────────────────
-function ResultFormModal({ initial, onSave, onClose }) {
+function ResultFormModal({ initial, onSave, onClose, batches = [] }) {
   const [form, setForm] = useState(() => {
     if (!initial) return emptyForm();
     return {
@@ -510,15 +510,64 @@ function ResultFormModal({ initial, onSave, onClose }) {
     };
   });
   const [saving, setSaving] = useState(false);
+  const [batchSuggestions, setBatchSuggestions] = useState([]);
+  const [showBatchDropdown, setShowBatchDropdown] = useState(false);
+  const batchInputRef = useRef(null);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  // Deduplicated sorted list of all existing batch names (case-insensitive dedup)
+  const existingBatchNames = (() => {
+    const seen = new Map();
+    batches
+      .map(b => b._id?.batch_name)
+      .filter(Boolean)
+      .forEach(name => {
+        const key = name.trim().toLowerCase();
+        if (!seen.has(key)) seen.set(key, name.trim());
+      });
+    return [...seen.values()].sort();
+  })();
+
+  // Batch name autocomplete — filter existing batches by what the admin has typed
+  const handleBatchNameChange = (val) => {
+    set('batch_name', val);
+    if (val.trim().length === 0) {
+      setBatchSuggestions([]);
+      setShowBatchDropdown(false);
+      return;
+    }
+    const lower = val.trim().toLowerCase();
+    // Show any batch whose name CONTAINS what was typed, even exact match
+    // (exact match still shown so admin can confirm they mean that batch)
+    const matched = existingBatchNames.filter(name =>
+      name.toLowerCase().includes(lower)
+    );
+    setBatchSuggestions(matched);
+    setShowBatchDropdown(matched.length > 0);
+  };
+
+  const selectBatchSuggestion = (name) => {
+    // Directly update form state — bypasses handleBatchNameChange to avoid
+    // re-triggering suggestions after a deliberate selection
+    setForm(f => ({ ...f, batch_name: name }));
+    setBatchSuggestions([]);
+    setShowBatchDropdown(false);
+  };
+
   const setSubject = (i, v) => {
-    const subs = [...form.subjects];
     const isNA = v === '' || v === null || v === undefined;
+    if (!isNA) {
+      const num = Number(v);
+      if (num < 0 || num > 100) {
+        toast.error('Subject score must be between 0 and 100.');
+        return;
+      }
+    }
+    const subs = [...form.subjects];
     subs[i] = { ...subs[i], marks_obtained: isNA ? null : Number(v) };
 
-    // Re-sort: subjects with marks first, N/A last (but keep HF always last among N/A)
+    // Re-sort: subjects with marks first, N/A last
     const withMarks    = subs.filter(s => s.marks_obtained != null);
     const withoutMarks = subs.filter(s => s.marks_obtained == null);
     set('subjects', [...withMarks, ...withoutMarks]);
@@ -529,13 +578,31 @@ function ResultFormModal({ initial, onSave, onClose }) {
       toast.error('Please fill in all required fields.');
       return;
     }
+    // Validate subject scores
+    for (const s of form.subjects) {
+      if (s.marks_obtained != null && (s.marks_obtained < 0 || s.marks_obtained > 100)) {
+        toast.error(`${s.abbr} score must be between 0 and 100.`);
+        return;
+      }
+    }
+    // Validate final scores
+    const fe = form.final_exam_score !== '' ? Number(form.final_exam_score) : null;
+    const fm = form.final_marks !== '' ? Number(form.final_marks) : null;
+    if (fe != null && (fe < 0 || fe > 100)) {
+      toast.error('Final Exam Score must be between 0 and 100.');
+      return;
+    }
+    if (fm != null && (fm < 0 || fm > 100)) {
+      toast.error('Overall Average / Final Marks must be between 0 and 100.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
         ...form,
         instructors: form.instructors.split(',').map(s => s.trim()).filter(Boolean),
-        final_exam_score: form.final_exam_score !== '' ? Number(form.final_exam_score) : null,
-        final_marks: form.final_marks !== '' ? Number(form.final_marks) : null,
+        final_exam_score: fe,
+        final_marks: fm,
       };
       await onSave(payload);
     } finally {
@@ -572,10 +639,33 @@ function ResultFormModal({ initial, onSave, onClose }) {
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-3">Batch & Course</h3>
             <div className="grid grid-cols-2 gap-3">
-              <div>
+              <div className="relative">
                 <label className="block text-xs font-medium text-gray-600 mb-1">Batch Name *</label>
-                <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="e.g. NOV-DEC 2024" value={form.batch_name} onChange={e => set('batch_name', e.target.value)} />
+                <input
+                  ref={batchInputRef}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="e.g. NOV-DEC 2024"
+                  value={form.batch_name}
+                  onChange={e => handleBatchNameChange(e.target.value)}
+                  onBlur={() => setTimeout(() => setShowBatchDropdown(false), 200)}
+                  autoComplete="off"
+                />
+                {showBatchDropdown && batchSuggestions.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-white border border-blue-100 rounded-xl shadow-lg overflow-hidden">
+                    <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Existing batch — add to it?</p>
+                    {batchSuggestions.map(name => (
+                      <button
+                        key={name}
+                        type="button"
+                        onMouseDown={() => selectBatchSuggestion(name)}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 flex items-center gap-2 transition-colors"
+                      >
+                        {name}
+                        <span className="ml-auto text-[10px] text-gray-400">Use existing</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Course Type *</label>
@@ -626,21 +716,33 @@ function ResultFormModal({ initial, onSave, onClose }) {
             </div>
           </div>
 
-          {/* Subject scores — all 12, empty = N/A (shown last in PDF) — N/A badge removed */}
+          {/* Subject scores — all 12, empty = N/A (shown last in PDF) */}
           <div>
             <h3 className="text-sm font-semibold text-gray-700 mb-1">Subject Scores</h3>
             <p className="text-xs text-gray-400 mb-3">Leave blank to mark as N/A on the result sheet. N/A subjects always appear last.</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {form.subjects.map((s, i) => (
-                <div key={s.abbr}>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    {s.abbr} – {s.name}
-                  </label>
-                  <input type="number" min="0" max="100"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Leave blank = N/A" value={s.marks_obtained ?? ''} onChange={e => setSubject(i, e.target.value)} />
-                </div>
-              ))}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-4">
+              {form.subjects.map((s, i) => {
+                const isOver = s.marks_obtained != null && s.marks_obtained > 100;
+                return (
+                  <div key={s.abbr} className="flex flex-col">
+                    <label className="text-xs font-medium text-gray-600 mb-1 min-h-[2rem] flex items-end leading-tight">
+                      <span>{s.abbr} – {s.name}</span>
+                    </label>
+                    <input type="number" min="0" max="100"
+                      className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+                        isOver
+                          ? 'border-red-400 bg-red-50 focus:ring-red-400 text-red-700'
+                          : 'border-gray-200 focus:ring-blue-500'
+                      }`}
+                      placeholder="Leave blank = N/A"
+                      value={s.marks_obtained ?? ''}
+                      onChange={e => setSubject(i, e.target.value)} />
+                    {isOver && (
+                      <p className="text-[10px] text-red-500 mt-0.5">Max 100</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -650,14 +752,30 @@ function ResultFormModal({ initial, onSave, onClose }) {
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Final Exam Score</label>
                 <input type="number" min="0" max="100"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={form.final_exam_score} onChange={e => set('final_exam_score', e.target.value)} />
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+                    form.final_exam_score !== '' && Number(form.final_exam_score) > 100
+                      ? 'border-red-400 bg-red-50 focus:ring-red-400 text-red-700'
+                      : 'border-gray-200 focus:ring-blue-500'
+                  }`}
+                  value={form.final_exam_score}
+                  onChange={e => set('final_exam_score', e.target.value)} />
+                {form.final_exam_score !== '' && Number(form.final_exam_score) > 100 && (
+                  <p className="text-[10px] text-red-500 mt-0.5">Max 100</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Overall Average / Final Marks</label>
                 <input type="number" min="0" max="100"
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  value={form.final_marks} onChange={e => set('final_marks', e.target.value)} />
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+                    form.final_marks !== '' && Number(form.final_marks) > 100
+                      ? 'border-red-400 bg-red-50 focus:ring-red-400 text-red-700'
+                      : 'border-gray-200 focus:ring-blue-500'
+                  }`}
+                  value={form.final_marks}
+                  onChange={e => set('final_marks', e.target.value)} />
+                {form.final_marks !== '' && Number(form.final_marks) > 100 && (
+                  <p className="text-[10px] text-red-500 mt-0.5">Max 100</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Sheet Date</label>
@@ -1480,7 +1598,7 @@ export default function ExamResults() {
           <ImportExcelModal onClose={() => setShowImport(false)} onImported={() => { fetchAll(); }} />
         )}
         {showForm && (
-          <ResultFormModal initial={editTarget} onSave={handleSave}
+          <ResultFormModal initial={editTarget} onSave={handleSave} batches={batches}
             onClose={() => { setShowForm(false); setEditTarget(null); }} />
         )}
         {viewStudent && (

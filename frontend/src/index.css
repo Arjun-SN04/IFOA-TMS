@@ -56,12 +56,6 @@
   }
 }
 
-/* Force date/time inputs to always show light (white) calendar picker */
-input[type="date"],
-input[type="time"],
-input[type="datetime-local"] {
-  color-scheme: light;
-}
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
@@ -92,8 +86,23 @@ input[type='datetime-local'],
 input[type='time'],
 input[type='month'] {
   color-scheme: light;
-  background-color: #f8fafc;
+  background-color: #ffffff;
   color: #1e293b;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator,
+input[type='datetime-local']::-webkit-calendar-picker-indicator,
+input[type='time']::-webkit-calendar-picker-indicator,
+input[type='month']::-webkit-calendar-picker-indicator {
+  filter: none;
+  color-scheme: light;
+  background-color: transparent;
+  cursor: pointer;
+}
+
+/* Ensure the entire page never triggers a dark color-scheme */
+:root {
+  color-scheme: light only;
 }
 
 /* Prevent body scroll when mobile sidebar is open */
