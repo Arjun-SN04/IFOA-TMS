@@ -153,15 +153,19 @@ export default function Signup() {
         setUploading(false);
       }
 
-      // Send OTP — backend creates unverified account + emails the code
-      await airlineSignup({ name: form.name, airlineName: form.airlineName, email: form.email, password: form.password, logo_url });
+      // OTP VERIFICATION DISABLED — signup now returns token directly
+      const res = await airlineSignup({ name: form.name, airlineName: form.airlineName, email: form.email, password: form.password, logo_url });
+      loginAdmin(res.data.token, { ...res.data.admin, role: 'airline' });
+      toast.success(`Welcome to IFOA, ${form.airlineName}!`);
+      navigate('/airline');
 
-      setPendingEmail(form.email);
-      setPendingAirline(form.airlineName);
-      resetTimer(600);
-      setOtp('');
-      setStep('otp');
-      toast.success(`Verification code sent to ${form.email}`, { duration: 4000 });
+      // // OTP step (disabled)
+      // setPendingEmail(form.email);
+      // setPendingAirline(form.airlineName);
+      // resetTimer(600);
+      // setOtp('');
+      // setStep('otp');
+      // toast.success(`Verification code sent to ${form.email}`, { duration: 4000 });
     } catch (err) {
       toast.error(err.response?.data?.error || 'Registration failed');
     } finally {
@@ -340,7 +344,7 @@ export default function Signup() {
                   {loading ? (
                     <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   ) : (
-                    <> Continue — Verify Email <HiOutlineArrowRight className="w-4 h-4" /> </>
+                    <> Create Account <HiOutlineArrowRight className="w-4 h-4" /> </>
                   )}
                 </button>
               </form>

@@ -138,46 +138,56 @@ router.post('/airline/signup', async (req, res) => {
     if (password.length < 6)
       return res.status(400).json({ error: 'Password must be at least 6 characters.' });
 
-    // Check duplicate email across both verified and pending accounts
+    // Check duplicate email
     const existing = await Airline.findOne({ email: email.toLowerCase().trim() });
     if (existing && existing.emailVerified)
       return res.status(400).json({ error: 'An account with this email already exists.' });
 
-    // Generate a 6-digit OTP
-    const rawOtp    = String(Math.floor(100000 + Math.random() * 900000));
-    const hashedOtp = await bcrypt.hash(rawOtp, 10);
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    // // OTP VERIFICATION DISABLED — commented out for now
+    // const rawOtp    = String(Math.floor(100000 + Math.random() * 900000));
+    // const hashedOtp = await bcrypt.hash(rawOtp, 10);
+    // const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
+    let airline;
     if (existing && !existing.emailVerified) {
-      // Reuse the pending record — update fields and resend OTP
-      existing.name        = name;
-      existing.airlineName = airlineName;
-      existing.password    = password;  // pre-save hook will re-hash
-      existing.logo_url    = logo_url || null;
-      existing.otpCode     = hashedOtp;
-      existing.otpExpiry   = otpExpiry;
-      existing.otpAttempts = 0;
+      // Reuse the pending record — update fields and mark verified directly
+      existing.name          = name;
+      existing.airlineName   = airlineName;
+      existing.password      = password;  // pre-save hook will re-hash
+      existing.logo_url      = logo_url || null;
+      existing.emailVerified = true;
+      // existing.otpCode     = hashedOtp;
+      // existing.otpExpiry   = otpExpiry;
+      // existing.otpAttempts = 0;
       await existing.save();
+      airline = existing;
     } else {
-      // Create a new unverified record
-      await Airline.create({
+      // Create a new verified record (skipping OTP step)
+      airline = await Airline.create({
         name, airlineName,
-        email:        email.toLowerCase().trim(),
+        email:         email.toLowerCase().trim(),
         password,
-        logo_url:     logo_url || null,
-        emailVerified: false,
-        otpCode:      hashedOtp,
-        otpExpiry,
-        otpAttempts:  0,
+        logo_url:      logo_url || null,
+        emailVerified: true,
+        // otpCode:      hashedOtp,
+        // otpExpiry,
+        // otpAttempts:  0,
       });
     }
 
-    // Send OTP email — throw on failure so client knows to retry
-    await sendOtpEmail({ toEmail: email, airlineName, otp: rawOtp });
+    // // Send OTP email — disabled
+    // await sendOtpEmail({ toEmail: email, airlineName, otp: rawOtp });
+
+    const token = jwt.sign(
+      { id: airline._id, email: airline.email, name: airline.name, airlineName: airline.airlineName, role: 'airline' },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
     res.status(200).json({
-      otpSent: true,
-      message: `A 6-digit verification code has been sent to ${email}. It expires in 10 minutes.`,
+      token,
+      admin: airline.toJSON(),
+      message: `Welcome to IFOA, ${airlineName}!`,
     });
   } catch (err) {
     console.error('Airline signup error:', err);
