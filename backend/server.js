@@ -115,12 +115,14 @@ const certificatesRouter    = require('./routes/certificates');
 const notificationsRouter   = require('./routes/notifications');
 const { router: authRouter } = require('./routes/auth');
 const examResultsRouter     = require('./routes/examResults');
+const attendanceRouter      = require('./routes/attendance');
 
 app.use('/api/auth', authRouter);
 app.use('/api/participants', participantsRouter);
 app.use('/api/certificates', certificatesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/exam-results', examResultsRouter);
+app.use('/api/attendance', attendanceRouter);
 
 // Frontend is served separately (localhost in dev, or its own host in prod).
 // The backend is API-only — do NOT serve static files from here.

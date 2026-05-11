@@ -15,10 +15,14 @@ import {
   HiOutlineCheckCircle,
   HiOutlineEye,
   HiOutlineDocumentDownload,
+  HiOutlineDocumentText,
   HiOutlineX,
+  HiOutlineClipboardList,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
-import { getParticipants, deleteParticipant, generateCertificateBlob, downloadIssuedCertificate } from '../api';
+import { getParticipants, deleteParticipant, generateCertificateBlob, downloadIssuedCertificate, listAttendanceSheets, getAttendanceSheet } from '../api';
+import AttendanceChecklistModal from '../components/AttendanceChecklistModal';
+import { buildAttendanceMap, generateAttendancePdf } from '../utils/generateAttendancePdf';
 
 const TRAINING_TYPES = [
   { value: 'FDI', label: 'Flight Dispatch Initial',      color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
@@ -53,13 +57,37 @@ function initials(name = '') {
 // ─── Collapsible group used in airline view ───────────────────────────────────
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
-function SubmissionGroup({ groupKey, records, defaultOpen = true }) {
+function SubmissionGroup({ groupKey, records, defaultOpen = true, attendanceSheets = [], onViewSheet }) {
   const [open, setOpen]             = useState(defaultOpen);
   const [downloading, setDownloading] = useState(null);
   const [preview, setPreview]       = useState(null);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [previewingSheet, setPreviewingSheet] = useState(null);
   const first    = records[0];
   const typeInfo = TYPE_MAP[first.training_type] || {};
+
+  const handlePreviewPdf = async (sheet) => {
+    try {
+      setPreviewingSheet(sheet._id);
+      const res  = await getAttendanceSheet(sheet._id);
+      const full = res.data;
+      const parts = full.participants || sheet.participants || [];
+      const attendanceMap = buildAttendanceMap(full.records || [], parts.length);
+      generateAttendancePdf({
+        participants:  parts,
+        startDate:     full.start_date,
+        endDate:       full.end_date,
+        company:       full.company,
+        trainingType:  full.training_type,
+        attendance:    attendanceMap,
+        mode:          'preview',
+      });
+    } catch {
+      toast.error('Failed to generate PDF preview');
+    } finally {
+      setPreviewingSheet(null);
+    }
+  };
 
   // Airlines always use /download/:id — read-only, cert_sequence must already exist
   const handleDownload = async (rec) => {
@@ -99,18 +127,31 @@ function SubmissionGroup({ groupKey, records, defaultOpen = true }) {
         </span>
 
         {/* Training type badge */}
-        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border flex-shrink-0 ${
           typeInfo.color || 'bg-primary-100 text-primary-600 border-primary-200'
         }`}>
           <HiOutlineAcademicCap className="w-3.5 h-3.5" />
           {first.training_type} — {typeInfo.label || first.training_type}
         </span>
 
+        {/* Date range */}
+        <span className="text-xs text-primary-500 flex-shrink-0">
+          {fmtDate(first.training_date)}
+          {first.end_date && first.end_date !== first.training_date ? ` – ${fmtDate(first.end_date)}` : ''}
+        </span>
+
         {/* Spacer */}
         <span className="flex-1" />
 
+        {/* Submitted timestamp */}
+        {first.created_at && (
+          <span className="text-[10px] text-primary-400 hidden sm:block flex-shrink-0">
+            Submitted {new Date(first.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+          </span>
+        )}
+
         {/* Count pill */}
-        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary-200 text-primary-600 text-[11px] font-semibold">
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-primary-200 text-primary-600 text-[11px] font-semibold flex-shrink-0">
           <HiOutlineUsers className="w-3 h-3" />
           {records.length} participant{records.length !== 1 ? 's' : ''}
         </span>
@@ -132,6 +173,45 @@ function SubmissionGroup({ groupKey, records, defaultOpen = true }) {
               <div className="px-5 py-2.5 bg-white border-b border-primary-100 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-primary-500">
                 {first.location && <span><span className="font-medium text-primary-700">Location:</span> {first.location}</span>}
                 {first.modules  && <span><span className="font-medium text-primary-700">Modules:</span> {first.modules}</span>}
+              </div>
+            )}
+
+            {/* Attendance sheets for this group */}
+            {attendanceSheets.length > 0 && (
+              <div className="px-5 py-3 bg-emerald-50/60 border-b border-emerald-100">
+                <span className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wider block mb-2">Attendance</span>
+                <div className="flex flex-wrap gap-2">
+                  {attendanceSheets.map(sheet => (
+                    <div key={sheet._id} className="flex items-center gap-1.5 bg-white border border-emerald-200 rounded-lg px-3 py-1.5">
+                      <HiOutlineClipboardList className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                      <span className="text-[11px] text-emerald-800 font-medium">
+                        {sheet.start_date}{sheet.end_date && sheet.end_date !== sheet.start_date ? ` – ${sheet.end_date}` : ''}
+                        <span className="text-emerald-500 ml-1">· {sheet.participants?.length ?? 0} participants</span>
+                      </span>
+                      <div className="flex items-center gap-1 ml-1">
+                        <button
+                          type="button"
+                          onClick={() => handlePreviewPdf(sheet)}
+                          disabled={previewingSheet === sheet._id}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary-50 border border-primary-200 text-primary-600 hover:bg-primary-100 transition-colors disabled:opacity-50"
+                        >
+                          {previewingSheet === sheet._id
+                            ? <div className="w-2.5 h-2.5 border-2 border-primary-300 border-t-primary-600 rounded-full animate-spin" />
+                            : <HiOutlineDocumentText className="w-3 h-3" />}
+                          PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onViewSheet(sheet)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-50 border border-emerald-300 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                        >
+                          <HiOutlineEye className="w-3 h-3" />
+                          View
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -323,11 +403,13 @@ function ParticipantModal({ record, onClose }) {
 
 export default function Participants() {
   const { isAdmin } = useAuth();
-  const [records, setRecords] = useState([]);
+  const [records, setRecords]               = useState([]);
+  const [attendanceSheets, setAttendanceSheets] = useState([]);
+  const [activeSheet, setActiveSheet]       = useState(null);
   const [searchParams] = useSearchParams();
-  const [search, setSearch] = useState(searchParams.get('search') || '');
+  const [search, setSearch]       = useState(searchParams.get('search') || '');
   const [filterType, setFilterType] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]       = useState(true);
 
   const fetchRecords = async () => {
     try {
@@ -335,16 +417,19 @@ export default function Participants() {
       const params = {};
       if (search) params.search = search;
       if (filterType) params.training_type = filterType;
-      const res = await getParticipants(params);
-      
-      // Sort records by creation date (oldest/first entered first)
-      const sorted = res.data.sort((a, b) => {
+      const [recRes, sheetRes] = await Promise.all([
+        getParticipants(params),
+        listAttendanceSheets(),
+      ]);
+
+      const sorted = recRes.data.sort((a, b) => {
         const dateA = a.created_at ? new Date(a.created_at).getTime() : Infinity;
         const dateB = b.created_at ? new Date(b.created_at).getTime() : Infinity;
         return dateA - dateB;
       });
-      
+
       setRecords(sorted);
+      setAttendanceSheets(sheetRes.data || []);
     } catch {
       toast.error('Failed to load records');
     } finally {
@@ -352,7 +437,7 @@ export default function Participants() {
     }
   };
 
-  useEffect(() => { fetchRecords(); }, [filterType, search]);
+  useEffect(() => { fetchRecords(); }, [filterType, search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Delete record for "${name}"?`)) return;
@@ -365,24 +450,19 @@ export default function Participants() {
     }
   };
 
-  // ── Group records by training_type only (airline view)
-  // Students from the same training programme are shown together regardless of date
+  // ── Group by training_type + training_date — one group per submission batch
   const groups = useMemo(() => {
     if (isAdmin) return null;
     const map = {};
     records.forEach(r => {
-      const key = r.training_type || 'Unknown';
+      const key = `${r.training_type || 'Unknown'}||${r.training_date || ''}`;
       if (!map[key]) map[key] = [];
       map[key].push(r);
     });
-    // Sort groups: most recent training_date first inside each group
-    Object.values(map).forEach(arr =>
-      arr.sort((a, b) => new Date(b.training_date || 0) - new Date(a.training_date || 0))
-    );
-    // Sort groups themselves: most recent record first
+    // Sort groups newest submission first (by most recent created_at in each group)
     return Object.entries(map).sort(([, a], [, b]) => {
-      const da = new Date(a[0].created_at || 0);
-      const db = new Date(b[0].created_at || 0);
+      const da = Math.max(...a.map(r => new Date(r.created_at || 0).getTime()));
+      const db = Math.max(...b.map(r => new Date(r.created_at || 0).getTime()));
       return db - da;
     });
   }, [records, isAdmin]);
@@ -395,6 +475,18 @@ export default function Participants() {
   if (!isAdmin) {
     return (
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+        {activeSheet && (
+          <AttendanceChecklistModal
+            participants={activeSheet.participants || []}
+            startDate={activeSheet.start_date}
+            endDate={activeSheet.end_date}
+            company={activeSheet.company}
+            trainingType={activeSheet.training_type}
+            attendanceId={activeSheet._id}
+            readOnly={activeSheet.readOnly}
+            onClose={() => setActiveSheet(null)}
+          />
+        )}
         {/* Header */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -446,16 +538,30 @@ export default function Participants() {
           <div className="card p-12 text-center text-sm text-primary-400">No submissions found.</div>
         ) : (
           <div className="space-y-3">
-            {groups && groups.map(([key, recs]) => (
-              <SubmissionGroup key={key} groupKey={key} records={recs} defaultOpen={true} />
-            ))}
+            {groups && groups.map(([key, recs]) => {
+              const [groupType, groupDate] = key.split('||');
+              const groupSheets = attendanceSheets.filter(s =>
+                s.training_type === groupType &&
+                (!groupDate || s.start_date === groupDate)
+              );
+              return (
+                <SubmissionGroup
+                  key={key}
+                  groupKey={key}
+                  records={recs}
+                  defaultOpen={true}
+                  attendanceSheets={groupSheets}
+                  onViewSheet={sheet => setActiveSheet({ ...sheet, readOnly: true })}
+                />
+              );
+            })}
           </div>
         )}
 
         {/* Footer count */}
         {!loading && records.length > 0 && (
           <p className="text-xs text-primary-400 text-right">
-            {records.length} total record{records.length !== 1 ? 's' : ''} across {groups?.length} batch{groups?.length !== 1 ? 'es' : ''}
+            {records.length} total record{records.length !== 1 ? 's' : ''} across {groups?.length} submission{groups?.length !== 1 ? 's' : ''}
           </p>
         )}
       </motion.div>
@@ -468,6 +574,18 @@ export default function Participants() {
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
       <ParticipantModal record={detailRecord} onClose={() => setDetailRecord(null)} />
+      {activeSheet && (
+        <AttendanceChecklistModal
+          participants={activeSheet.participants || []}
+          startDate={activeSheet.start_date}
+          endDate={activeSheet.end_date}
+          company={activeSheet.company}
+          trainingType={activeSheet.training_type}
+          attendanceId={activeSheet._id}
+          readOnly={false}
+          onClose={() => setActiveSheet(null)}
+        />
+      )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-primary-800">Participants</h1>
@@ -504,6 +622,40 @@ export default function Participants() {
           </div>
         </div>
       </div>
+
+      {/* ── Attendance Records (admin) ── */}
+      {attendanceSheets.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="px-5 py-3 border-b border-primary-100 flex items-center gap-2">
+            <HiOutlineClipboardList className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-semibold text-primary-700">Attendance Records</h2>
+            <span className="text-[11px] text-primary-400 ml-1">{attendanceSheets.length} sheet{attendanceSheets.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="divide-y divide-primary-50">
+            {attendanceSheets.map(sheet => (
+              <div key={sheet._id} className="flex items-center gap-4 px-5 py-3 hover:bg-emerald-50/30 transition-colors">
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium text-primary-800">{sheet.company}</span>
+                  <span className="mx-2 text-primary-300">·</span>
+                  {typeBadge(sheet.training_type)}
+                  <span className="ml-2 text-xs text-primary-400">
+                    {sheet.start_date}{sheet.end_date && sheet.end_date !== sheet.start_date ? ` – ${sheet.end_date}` : ''}
+                    {' · '}{sheet.participants?.length ?? 0} participant{(sheet.participants?.length ?? 0) !== 1 ? 's' : ''}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveSheet(sheet)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                >
+                  <HiOutlineClipboardList className="w-3.5 h-3.5" />
+                  View / Edit
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card overflow-hidden">
         <div className="overflow-x-auto">

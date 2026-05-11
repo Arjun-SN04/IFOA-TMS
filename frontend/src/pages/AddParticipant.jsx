@@ -10,10 +10,12 @@ import {
   HiOutlineUser,
   HiOutlineCheckCircle,
   HiOutlineExclamationCircle,
+  HiOutlineClipboardList,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 import { createParticipant, getAirlinesList, sendSubmissionConfirmation } from '../api';
 import { useAuth } from '../context/AuthContext';
+import AttendanceChecklistModal from '../components/AttendanceChecklistModal';
 
 const TRAINING_TYPES = [
   { value: 'FDI', label: 'FDI – Flight Dispatch Initial' },
@@ -51,9 +53,13 @@ const emptyRow = (defaultNdgSubtype = 'I', defaultDepartment = '') => ({
   ndg_subtype: defaultNdgSubtype, // I or R for NDG training overrides
 });
 
+// AttendanceChecklistModal — imported from ../components/AttendanceChecklistModal
+
 // ─── Single-mode form ─────────────────────────────────────────────────────────
 function SingleForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
   const [saving, setSaving] = useState(false);
+  const [showChecklist, setShowChecklist] = useState(false);
+  const [attendanceSheetId, setAttendanceSheetId] = useState(null);
   const [form, setForm] = useState({
     first_name: '',
     last_name: '',
@@ -302,11 +308,35 @@ function SingleForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
       )}
 
       <div className="flex items-center justify-end gap-3 pt-4 border-t border-primary-200">
+        <button
+          type="button"
+          onClick={() => {
+            if (!form.training_date) { toast.error('Set a start date first'); return; }
+            setShowChecklist(true);
+          }}
+          className="btn-outline flex items-center gap-1.5"
+        >
+          <HiOutlineClipboardList className="w-4 h-4" />
+          Attendance Checklist
+        </button>
         <button type="button" onClick={onSuccess} className="btn-outline">Cancel</button>
         <button type="submit" disabled={saving} className="btn-primary">
           {saving ? 'Saving…' : isAdmin ? 'Add Participant' : 'Submit Enrollment'}
         </button>
       </div>
+
+      {showChecklist && (
+        <AttendanceChecklistModal
+          participants={[{ first_name: form.first_name, last_name: form.last_name }]}
+          startDate={form.training_date}
+          endDate={form.end_date}
+          company={form.company}
+          trainingType={form.training_type}
+          attendanceId={attendanceSheetId}
+          onIdSaved={(id) => setAttendanceSheetId(id)}
+          onClose={() => setShowChecklist(false)}
+        />
+      )}
     </form>
   );
 }
@@ -418,6 +448,9 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
   const [saving, setSaving]              = useState(false);
   const [results, setResults] = useState({});
   const [done, setDone]       = useState(false);
+  const [showChecklist, setShowChecklist]     = useState(false);
+  const [attendanceSheetId, setAttendanceSheetId] = useState(null);
+  const [trackAttendance, setTrackAttendance] = useState(false);
 
   // ── Shared session fields (apply to ALL participants) ──
   const [shared, setShared] = useState({
@@ -750,6 +783,40 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
             </div>
           </div>
         )}
+
+        {/* Attendance tracking — optional */}
+        <div className="pt-2 border-t border-primary-100 space-y-2">
+          <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+            <button
+              type="button"
+              onClick={() => setTrackAttendance(v => !v)}
+              className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                trackAttendance ? 'bg-accent-600 border-accent-600' : 'border-primary-300 hover:border-primary-500'
+              }`}
+            >
+              {trackAttendance && (
+                <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+            </button>
+            <span className="text-sm font-medium text-primary-700">Track Attendance</span>
+            <span className="text-xs text-primary-400">(optional)</span>
+          </label>
+          {trackAttendance && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!shared.training_date) { toast.error('Set a start date first'); return; }
+                setShowChecklist(true);
+              }}
+              className="btn-outline flex items-center gap-1.5"
+            >
+              <HiOutlineClipboardList className="w-4 h-4" />
+              Attendance Checklist
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Participant Names ── */}
@@ -773,21 +840,23 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
           <span className="w-8" />
         </div>
 
-        <AnimatePresence mode="popLayout">
-          {rows.map((row, idx) => (
-            <BulkRow
-              key={row.id}
-              row={row}
-              idx={idx}
-              onChange={updateRow}
-              onRemove={removeRow}
-              result={results[row.id]}
-              isNDG={shared.training_type === 'NDG'}
-              ndgMode={shared.ndg_mode}
-              departmentMode={shared.department_mode}
-            />
-          ))}
-        </AnimatePresence>
+        <div className="overflow-y-auto max-h-72 space-y-2 pr-1">
+          <AnimatePresence mode="popLayout">
+            {rows.map((row, idx) => (
+              <BulkRow
+                key={row.id}
+                row={row}
+                idx={idx}
+                onChange={updateRow}
+                onRemove={removeRow}
+                result={results[row.id]}
+                isNDG={shared.training_type === 'NDG'}
+                ndgMode={shared.ndg_mode}
+                departmentMode={shared.department_mode}
+              />
+            ))}
+          </AnimatePresence>
+        </div>
 
         {!done && (
           <button type="button" onClick={addRow}
@@ -826,6 +895,19 @@ function BulkForm({ isAdmin, airlineName, airlineOptions, onSuccess }) {
           )}
         </div>
       </div>
+
+      {showChecklist && (
+        <AttendanceChecklistModal
+          participants={rows.map(r => ({ first_name: r.first_name, last_name: r.last_name }))}
+          startDate={shared.training_date}
+          endDate={shared.end_date}
+          company={company === '__other__' ? customCompany.trim() : company}
+          trainingType={shared.training_type}
+          attendanceId={attendanceSheetId}
+          onIdSaved={(id) => setAttendanceSheetId(id)}
+          onClose={() => setShowChecklist(false)}
+        />
+      )}
     </form>
   );
 }

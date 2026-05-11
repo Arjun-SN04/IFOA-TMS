@@ -16,6 +16,7 @@ import Certificates from './pages/Certificates';
 import Airlines from './pages/Airlines';
 import Profile from './pages/Profile';
 import ExamResults from './pages/ExamResults';
+import AttendanceSheets from './pages/AttendanceSheets';
 
 // Requires any authenticated user (admin or airline)
 function ProtectedRoute({ children }) {
@@ -82,6 +83,7 @@ function App() {
           <Route path="airlines" element={<AdminRoute><Airlines /></AdminRoute>} />
           <Route path="participants/edit/:id" element={<AdminRoute><EditParticipant /></AdminRoute>} />
           <Route path="certificates" element={<AdminRoute><Certificates /></AdminRoute>} />
+          <Route path="attendance"   element={<AdminRoute><AttendanceSheets /></AdminRoute>} />
           <Route path="exam-results" element={<AdminRoute><ExamResults /></AdminRoute>} />
         </Route>
 
